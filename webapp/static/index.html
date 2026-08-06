@@ -1,0 +1,774 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WASP-12b Knowledge Base</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<style>
+  :root {
+    --bg: #060912; --bg-panel: #0d1220; --bg-elev: #131a2c; --border: #20283d;
+    --fg: #c7d2e6; --fg-dim: #7d8aa8; --accent: #4fd1ff; --accent-2: #ffb454;
+    --cited: #ffb454; --flash: rgba(79, 209, 255, 0.18);
+    --chip-bg: #16314a; --chip-fg: #8fe0ff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  /* This is a fixed single-viewport app — every scrollable region is an
+     explicit internal panel (.region, .doc, .chat-region, etc.), never the
+     page itself. Without this, KaTeX's stretchy-symbol SVGs (intentionally
+     oversized, e.g. width="400em", meant to be clipped by a CSS ancestor)
+     can inflate documentElement's measured scrollable extent even though
+     nothing is actually mis-laid-out — found via real browser testing. */
+  body {
+    background: var(--bg); color: var(--fg);
+    font: 15px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; flex-direction: column;
+  }
+  a { color: var(--accent); }
+  header {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 12px;
+    padding: 10px 18px; background: linear-gradient(180deg, #0a1020, #070b15);
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 15px; font-weight: 600; letter-spacing: 0.04em; margin: 0; color: #eaf2ff; }
+  header h1 .glyph { color: var(--accent); margin-right: 8px; }
+  header .spacer { flex: 1; }
+  input#searchBox {
+    background: var(--bg-elev); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 10px; width: 260px; font-size: 13px;
+  }
+  button.action, button.tab {
+    background: var(--bg-elev); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 12px; cursor: pointer; font-size: 13px;
+  }
+  button.action:hover, button.tab:hover { border-color: var(--accent); color: #eaf2ff; }
+  button.tab.active { border-color: var(--accent); color: #eaf2ff; background: #16314a; }
+
+  main {
+    flex: 1 1 auto; min-height: 0; display: grid;
+    grid-template-columns: var(--left-w, 36%) 6px 1fr;
+    grid-template-rows: minmax(0, 1fr);  /* without this, the implicit row
+      auto-sizes to its tallest child's natural content height instead of the
+      available flex height — invisible with a handful of documents, but a
+      210-doc corpus with an 80-member expanded theme group grows the whole
+      page instead of scrolling internally (found via real browser testing) */
+  }
+  .left { display: grid; grid-template-rows: 1fr 1.3fr; min-width: 0; min-height: 0; }
+  .left-top {
+    display: grid; grid-template-columns: 1fr 6px var(--toc-w, 200px);
+    grid-template-rows: minmax(0, 1fr);  /* same fix as main — see its comment */
+    min-height: 0; border-bottom: 1px solid var(--border);
+  }
+  .region { min-width: 0; min-height: 0; overflow: auto; padding: 12px 14px; }
+  .resizer.col { background: var(--border); cursor: col-resize; transition: background-color 0.15s; }
+  .resizer.col:hover, .resizer.col.dragging { background: var(--accent); }
+  .region h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--fg-dim); margin: 0 0 10px; }
+
+  /* Plain div-based disclosure, not <details>/<summary>: modern Chromium still
+     computes layout for a closed <details>'s content (it's hidden via a
+     content-visibility-like mechanism, not true display:none), so its full
+     height keeps contributing to the ancestor's scrollHeight even while
+     collapsed — invisible with a handful of items, but real at 200+ papers
+     across a dozen groups (found via real browser testing). Explicit
+     display:none on .group-body.collapsed has no such quirk. */
+  .group { margin: 2px 0; }
+  .group-header { cursor: pointer; padding: 3px 4px; color: #d7e2f5; font-weight: 600; }
+  .group-header::before { content: "▾"; color: var(--fg-dim); margin-right: 6px; }
+  .group-header.collapsed::before { content: "▸"; }
+  .group-body { margin-left: 14px; border-left: 1px solid var(--border); padding-left: 8px; }
+  .group-body.collapsed { display: none; }
+  .leaf { display: flex; align-items: baseline; gap: 6px; padding: 3px 6px; border-radius: 5px; cursor: pointer; color: var(--fg); }
+  .leaf:hover { background: var(--bg-elev); }
+  .leaf.active { background: var(--bg-elev); outline: 1px solid var(--accent); }
+  .leaf .leaf-label { font-size: 13px; }
+  .leaf.stub .leaf-label { color: var(--fg-dim); font-style: italic; }
+  .leaf.cited .leaf-label::after {
+    content: "cited"; margin-left: 7px; font-size: 10px; color: var(--cited);
+    border: 1px solid var(--cited); border-radius: 4px; padding: 0 4px; vertical-align: middle;
+  }
+
+  /* Chat / Answers panel */
+  .chat-region { display: flex; flex-direction: column; min-height: 0; }
+  .chat-tabs { display: flex; gap: 6px; padding: 8px 10px 0; flex: 0 0 auto; }
+  .chat-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+  .convo-bar { display: flex; gap: 6px; padding: 8px 10px; align-items: center; }
+  select#convoSelect { flex: 1; background: var(--bg-elev); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 5px 6px; font-size: 13px; }
+  #messages { flex: 1 1 auto; overflow: auto; padding: 6px 12px; }
+  .msg { margin-bottom: 14px; }
+  .msg.user { color: #eaf2ff; font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+  .msg.assistant .answer p { margin: 0 0 8px; }
+  .msg.assistant .answer code { background: #0a1830; padding: 1px 5px; border-radius: 4px; color: #9fe7c5; font-size: 0.9em; }
+  button.chip {
+    background: var(--chip-bg); color: var(--chip-fg); border: 1px solid #285a7e;
+    border-radius: 4px; padding: 0 5px; margin: 0 1px; font: inherit; font-size: 0.82em;
+    cursor: pointer; vertical-align: baseline;
+  }
+  button.chip:hover, button.chip:focus { background: #1d4a6e; outline: 1px solid var(--accent); }
+  .references { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border); }
+  .references h4 { font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--fg-dim); margin: 0 0 4px; }
+  .ref-item { display: flex; align-items: flex-start; gap: 4px; margin: 1px 0; }
+  .ref-nav { display: block; flex: 1 1 auto; min-width: 0; text-align: left; background: none; border: none; color: var(--fg); cursor: pointer; padding: 3px 4px; border-radius: 5px; font: inherit; font-size: 12px; line-height: 1.45; }
+  .ref-nav:hover, .ref-nav:focus { background: var(--bg-elev); outline: 1px solid var(--accent); }
+  .ref-nav .ref-id { color: var(--chip-fg); font-weight: 600; margin-right: 6px; }
+  .ref-nav .ref-cite { font-weight: 600; }
+  .ref-nav .ref-title { color: var(--fg); font-style: italic; }
+  .ref-nav .ref-journal { color: var(--fg-dim); }
+  .ref-nav .ref-sec { display: block; color: var(--fg-dim); margin-left: 20px; }
+  .ref-ads { flex: 0 0 auto; color: var(--fg-dim); text-decoration: none; font-size: 11px; padding: 4px 5px; border-radius: 5px; }
+  .ref-ads:hover, .ref-ads:focus { background: var(--bg-elev); color: var(--accent); outline: 1px solid var(--accent); }
+  .warnings { margin-top: 8px; font-size: 11px; color: var(--accent-2); }
+  .step-indicator { font-size: 12px; color: var(--fg-dim); padding: 4px 0; }
+  .step-indicator .step.done { color: var(--accent); }
+  .chat-input-row { display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--border); flex: 0 0 auto; }
+  #chatInput { flex: 1; background: var(--bg-elev); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 8px; font: inherit; resize: none; }
+  .empty { color: var(--fg-dim); font-style: italic; padding: 10px; }
+  .answers-list { overflow: auto; padding: 6px 12px; flex: 1 1 auto; }
+  .answer-row { padding: 6px 8px; border-radius: 5px; cursor: pointer; font-size: 13px; }
+  .answer-row:hover { background: var(--bg-elev); }
+  .answer-row .kind { font-size: 10px; color: var(--fg-dim); text-transform: uppercase; letter-spacing: 0.06em; }
+
+  /* Viewer */
+  .toc { overflow: auto; padding: 12px 10px; background: var(--bg-panel); min-width: 0; }
+  .toc h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--fg-dim); margin: 0 0 8px; }
+  .toc ul { list-style: none; margin: 0; padding-left: 10px; }
+  .toc > ul { padding-left: 0; }
+  .toc li { margin: 1px 0; }
+  .toc a { display: block; color: var(--fg-dim); text-decoration: none; padding: 2px 4px; border-radius: 4px; font-size: 12px; }
+  .toc a:hover { color: var(--fg); background: var(--bg-elev); }
+  .doc { overflow: auto; padding: 22px 30px; min-height: 0; min-width: 0; }
+  .doc img { max-width: 100%; height: auto; display: block; margin: 14px auto; background: #fff; border-radius: 4px; }
+  .doc h1, .doc h2, .doc h3 { color: #eaf2ff; line-height: 1.3; }
+  .doc table { border-collapse: collapse; margin: 12px 0; }
+  .doc th, .doc td { border: 1px solid var(--border); padding: 4px 8px; }
+  .doc pre { background: #0a1830; padding: 10px; border-radius: 6px; overflow: auto; }
+  .doc figure { margin: 16px 0; text-align: center; }
+  .doc figcaption { font-size: 13px; color: var(--fg-dim); margin-top: 6px; text-align: left; }
+  .doc .equation { text-align: center; margin: 12px 0; overflow-x: auto; }
+  .doc .node-reference, .doc .node-footnote { font-size: 13px; color: var(--fg-dim); }
+  .node-block { scroll-margin-top: 16px; border-radius: 6px; transition: background-color 0.4s ease; padding: 0 8px; }
+  .node-block.flash { background: var(--flash); }
+  .viewer-empty { color: var(--fg-dim); padding: 40px; text-align: center; font-style: italic; }
+
+  #searchResults {
+    position: absolute; top: 46px; right: 18px; width: 420px; max-height: 60vh; overflow: auto;
+    background: var(--bg-panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px; z-index: 20; display: none; box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  }
+  #searchResults.open { display: block; }
+  .search-hit { padding: 6px 8px; border-radius: 5px; cursor: pointer; font-size: 13px; }
+  .search-hit:hover { background: var(--bg-elev); }
+  .search-hit .hit-title { color: #eaf2ff; font-weight: 600; font-size: 12px; }
+  .search-hit .hit-snip { color: var(--fg-dim); font-size: 12px; }
+
+  @media (max-width: 820px) {
+    main { grid-template-columns: 1fr; grid-auto-rows: minmax(220px, auto); }
+    .left { grid-template-rows: auto auto; }
+    .left-top { grid-template-columns: 1fr; }
+    .toc { border-top: 1px solid var(--border); max-height: 220px; }
+    .resizer.col { display: none; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="glyph">✦</span>WASP-12b Knowledge Base</h1>
+  <div class="spacer"></div>
+  <input type="text" id="searchBox" placeholder="Search papers…">
+</header>
+
+<div id="searchResults"></div>
+
+<main>
+  <div class="left">
+    <div class="left-top">
+      <section class="region tree-region">
+        <h2>Papers</h2>
+        <div id="docTree"></div>
+      </section>
+      <div class="resizer col" id="rzTree" title="Drag to resize"></div>
+      <nav class="region toc">
+        <h2>Contents</h2>
+        <div id="toc"></div>
+      </nav>
+    </div>
+    <section class="region chat-region">
+      <div class="chat-tabs">
+        <button class="tab active" id="tabChat">Chat</button>
+        <button class="tab" id="tabAnswers">Answers</button>
+      </div>
+      <div class="chat-body" id="chatBody">
+        <div class="convo-bar">
+          <select id="convoSelect"></select>
+          <button class="action" id="newConvoBtn">New</button>
+        </div>
+        <div id="messages"><div class="empty">No conversation selected — click New to start one.</div></div>
+        <div class="step-indicator" id="stepIndicator"></div>
+        <div class="chat-input-row">
+          <textarea id="chatInput" rows="2" placeholder="Ask about these papers…"></textarea>
+          <button class="action" id="sendBtn">Send</button>
+        </div>
+      </div>
+      <div class="answers-list" id="answersBody" style="display:none;"></div>
+    </section>
+  </div>
+  <div class="resizer col" id="rzMain" title="Drag to resize"></div>
+  <article class="doc" id="docView">
+    <div class="viewer-empty">Select a paper, ask a question, or click a citation to read it here.</div>
+  </article>
+</main>
+
+<script>
+"use strict";
+
+/* ---------------------------------------------------------------------------
+ * App state
+ * ------------------------------------------------------------------------- */
+const STATE = {
+  documentTree: null,
+  activeDocId: null,
+  docCache: {},
+  conversations: [],
+  activeConversationId: null,
+  messages: [],          // active conversation's messages, enriched with payload
+  answers: [],
+};
+function renderMath(el) {
+  if (window.renderMathInElement) {
+    try {
+      window.renderMathInElement(el, {
+        delimiters: [
+          { left: "$$", right: "$$", display: true },
+          { left: "$", right: "$", display: false },
+        ],
+        throwOnError: false,
+      });
+    } catch (_) {}
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Minimal markdown renderer for chat/answer prose (same approach as
+ * multi_doc_navigator: produces real <code>/<a> so chip injection can skip
+ * them; document bodies are rendered server-side, this is answer-prose only).
+ * ------------------------------------------------------------------------- */
+function escapeHtml(s) {
+  return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+const STASH_MARK = "\uE000"; // a Unicode Private-Use-Area codepoint (via a
+                              // JS escape sequence, not a raw byte in this file)
+                              // that will never appear in real prose or in
+                              // escapeHtml output. The original " (\d+) "
+                              // placeholder (plain digits between spaces) collided
+                              // with any number already in the text (e.g. the
+                              // model wrote "± 2 ms" -> stash[2] was unset ->
+                              // rendered as the literal string "undefined")
+function renderInline(src) {
+  let text = escapeHtml(src);
+  const stash = [];
+  const keep = (html) => { stash.push(html); return `${STASH_MARK}${stash.length - 1}${STASH_MARK}`; };
+  text = text.replace(/`([^`]+)`/g, (_, c) => keep(`<code>${c}</code>`));
+  text = text.replace(/\[((?:[^\[\]]|\[[^\]]*\])*)\]\(([^)\s]+)\)/g,
+    (_, t, u) => keep(`<a href="${u}" target="_blank" rel="noopener">${t}</a>`));
+  text = text.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  text = text.replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>");
+  text = text.replace(new RegExp(`${STASH_MARK}(\\d+)${STASH_MARK}`, "g"), (_, i) => stash[Number(i)]);
+  return text;
+}
+function renderMarkdown(src) {
+  const blocks = (src || "").split(/\n{2,}/);
+  const out = [];
+  for (const raw of blocks) {
+    const block = raw.trim();
+    if (!block) continue;
+    const h = block.match(/^(#{1,4})\s+(.*)$/);
+    if (h) { out.push(`<h${h[1].length}>${renderInline(h[2])}</h${h[1].length}>`); continue; }
+    const lines = block.split("\n");
+    if (lines.every((l) => /^\s*[-*]\s+/.test(l))) {
+      out.push("<ul>" + lines.map((l) => `<li>${renderInline(l.replace(/^\s*[-*]\s+/, ""))}</li>`).join("") + "</ul>");
+      continue;
+    }
+    out.push(`<p>${renderInline(block.replace(/\n/g, " "))}</p>`);
+  }
+  return out.join("\n");
+}
+
+/* ---------------------------------------------------------------------------
+ * Citation chips — identical mechanics to multi_doc_navigator: walk text
+ * nodes, skip anything under CODE/PRE/A/BUTTON, replace [n] with a button.
+ * ------------------------------------------------------------------------- */
+function injectChips(container) {
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      for (let p = node.parentElement; p && p !== container; p = p.parentElement) {
+        if (["CODE", "PRE", "A", "BUTTON"].includes(p.tagName)) return NodeFilter.FILTER_REJECT;
+      }
+      return /\[\d+\]/.test(node.nodeValue) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+    },
+  });
+  const targets = [];
+  while (walker.nextNode()) targets.push(walker.currentNode);
+  for (const node of targets) {
+    const frag = document.createDocumentFragment();
+    const s = node.nodeValue;
+    const re = /\[(\d+)\]/g;
+    let last = 0, m;
+    while ((m = re.exec(s))) {
+      if (m.index > last) frag.appendChild(document.createTextNode(s.slice(last, m.index)));
+      const btn = document.createElement("button");
+      btn.className = "chip";
+      btn.dataset.citationId = m[1];
+      btn.textContent = `[${m[1]}]`;
+      frag.appendChild(btn);
+      last = m.index + m[0].length;
+    }
+    if (last < s.length) frag.appendChild(document.createTextNode(s.slice(last)));
+    node.parentNode.replaceChild(frag, node);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Document tree
+ * ------------------------------------------------------------------------- */
+function citedDocIds() {
+  const cited = new Set();
+  for (const m of STATE.messages) {
+    if (m.role !== "assistant" || !m.payload) continue;
+    for (const r of m.payload.results || []) for (const c of r.citations) cited.add(c.doc_id);
+  }
+  return cited;
+}
+async function loadDocumentTree() {
+  STATE.documentTree = await fetch("/api/documents").then((r) => r.json());
+  renderDocTree();
+}
+function renderDocTree() {
+  const cited = citedDocIds();
+  const host = document.getElementById("docTree");
+  host.innerHTML = "";
+  (STATE.documentTree.children || []).forEach((child) => host.appendChild(renderTreeNode(child, cited)));
+}
+function renderTreeNode(node, cited) {
+  if (node.children) {
+    const group = document.createElement("div");
+    group.className = "group";
+    const header = document.createElement("div");
+    header.className = "group-header collapsed";
+    header.textContent = `${node.title} (${node.children.length})`;
+    const body = document.createElement("div");
+    body.className = "group-body collapsed";
+    node.children.forEach((c) => body.appendChild(renderTreeNode(c, cited)));
+    header.addEventListener("click", () => {
+      header.classList.toggle("collapsed");
+      body.classList.toggle("collapsed");
+    });
+    group.appendChild(header);
+    group.appendChild(body);
+    return group;
+  }
+  const leaf = document.createElement("div");
+  leaf.className = "leaf" + (node.has_fulltext ? "" : " stub");
+  if (cited.has(node.doc_id)) leaf.classList.add("cited");
+  if (node.doc_id === STATE.activeDocId) leaf.classList.add("active");
+  leaf.dataset.docId = node.doc_id;
+  leaf.title = node.doc_name;
+  const label = document.createElement("span");
+  label.className = "leaf-label";
+  label.textContent = `${node.doc_name.slice(0, 60)}${node.doc_name.length > 60 ? "…" : ""} (${node.year || "?"})`;
+  leaf.appendChild(label);
+  leaf.addEventListener("click", () => setActiveDoc(node.doc_id));
+  return leaf;
+}
+function updateTreeMarks() {
+  const cited = citedDocIds();
+  document.querySelectorAll("#docTree .leaf").forEach((leaf) => {
+    const id = leaf.dataset.docId;
+    leaf.classList.toggle("cited", cited.has(id));
+    leaf.classList.toggle("active", id === STATE.activeDocId);
+  });
+}
+
+/* ---------------------------------------------------------------------------
+ * Viewer + TOC + navigation
+ * ------------------------------------------------------------------------- */
+async function getDoc(docId) {
+  if (STATE.docCache[docId]) return STATE.docCache[docId];
+  const d = await fetch(`/api/documents/${encodeURIComponent(docId)}`).then((r) => r.json());
+  STATE.docCache[docId] = d;
+  return d;
+}
+async function setActiveDoc(docId, nodeId) {
+  if (!docId) return;
+  const switching = docId !== STATE.activeDocId;
+  STATE.activeDocId = docId;
+  const view = document.getElementById("docView");
+  if (switching) {
+    view.innerHTML = '<div class="viewer-empty">Loading…</div>';
+    let doc;
+    try { doc = await getDoc(docId); }
+    catch (e) { view.innerHTML = '<div class="viewer-empty">Failed to load document.</div>'; return; }
+    if (STATE.activeDocId !== docId) return;
+    if (!doc.has_fulltext) {
+      view.innerHTML = `<div class="viewer-empty">"${escapeHtml(doc.doc_name)}" has no full text in this knowledge base — metadata only.</div>`;
+      document.getElementById("toc").innerHTML = "";
+    } else {
+      view.innerHTML = doc.html;
+      renderMath(view);
+      renderTOC(doc.tree);
+    }
+    updateTreeMarks();
+  }
+  if (nodeId) scrollAndFlash(nodeId);
+}
+function renderTOC(tree) {
+  const host = document.getElementById("toc");
+  host.innerHTML = "";
+  host.appendChild(buildTocList(tree || []));
+}
+function buildTocList(nodes) {
+  const ul = document.createElement("ul");
+  nodes.forEach((n) => {
+    const li = document.createElement("li");
+    const a = document.createElement("a");
+    a.href = "#node-" + n.node_id;
+    a.textContent = n.title || n.node_id;
+    a.addEventListener("click", (e) => { e.preventDefault(); scrollToNode(n.node_id); });
+    li.appendChild(a);
+    if (n.children && n.children.length) li.appendChild(buildTocList(n.children));
+    ul.appendChild(li);
+  });
+  return ul;
+}
+function nodeBlock(nodeId) {
+  return document.querySelector(`#docView section[data-node-id="${CSS.escape(nodeId)}"]`);
+}
+function scrollToNode(nodeId) {
+  const block = nodeBlock(nodeId);
+  if (block) block.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+function scrollAndFlash(nodeId) {
+  const block = nodeBlock(nodeId);
+  if (!block) return;
+  block.scrollIntoView({ behavior: "smooth", block: "start" });
+  block.classList.remove("flash");
+  void block.offsetWidth;
+  block.classList.add("flash");
+  setTimeout(() => block.classList.remove("flash"), 1500);
+}
+
+/* ---------------------------------------------------------------------------
+ * Answer/message rendering — ONE renderer for chat messages, published
+ * answers, and (implicitly) wiki pages carry the same [n]-citation shape,
+ * per the "answer payload is the universal unit" principle.
+ * ------------------------------------------------------------------------- */
+function renderResult(result, container) {
+  const answer = document.createElement("div");
+  answer.className = "answer";
+  answer.innerHTML = renderMarkdown(result.answer);
+  injectChips(answer);
+  container.appendChild(answer);
+  renderMath(answer);
+
+  if (result.citations && result.citations.length) {
+    const refs = document.createElement("div");
+    refs.className = "references";
+    refs.innerHTML = "<h4>References</h4>";
+    result.citations.forEach((c) => {
+      // author_year/journal/ads_url come from validate_and_enrich (backend) —
+      // doc_name/section_title alone ("2011 § B. Atmospheric Model...") don't
+      // tell a reader which paper this is; the traditional author-year label
+      // + title does, matching the format used in agent-published answers.
+      const item = document.createElement("div");
+      item.className = "ref-item";
+      const nav = document.createElement("button");
+      nav.className = "ref-nav";
+      nav.dataset.citationId = c.id;
+      nav.dataset.docId = c.doc_id;
+      nav.dataset.nodeId = c.node_id;
+      const cite = escapeHtml(c.author_year || c.doc_name || c.doc_id);
+      const title = escapeHtml(c.doc_name || "");
+      const journal = c.journal ? ` <span class="ref-journal">(${escapeHtml(c.journal)})</span>` : "";
+      nav.innerHTML = `<span class="ref-id">[${c.id}]</span>` +
+        `<span class="ref-cite">${cite}</span>, ` +
+        `<span class="ref-title">${title}</span>${journal}` +
+        `<span class="ref-sec">§ ${escapeHtml(c.section_title || "")}</span>`;
+      item.appendChild(nav);
+      if (c.ads_url) {
+        const ads = document.createElement("a");
+        ads.className = "ref-ads";
+        ads.href = c.ads_url;
+        ads.target = "_blank";
+        ads.rel = "noopener";
+        ads.title = "Open on ADS";
+        ads.textContent = "ADS ↗";
+        item.appendChild(ads);
+      }
+      refs.appendChild(item);
+    });
+    container.appendChild(refs);
+  }
+  container.querySelectorAll(".chip, .ref-nav").forEach((el) => {
+    const id = Number(el.dataset.citationId);
+    const cite = result.citations.find((c) => c.id === id);
+    if (!cite) return;
+    if (el.classList.contains("chip")) {
+      el.title = `${cite.author_year || cite.doc_name || cite.doc_id} — ${cite.section_title || ""}`;
+    }
+    el.addEventListener("click", () => setActiveDoc(cite.doc_id, cite.node_id));
+  });
+}
+
+/* ---------------------------------------------------------------------------
+ * Conversations + chat
+ * ------------------------------------------------------------------------- */
+async function loadConversations() {
+  STATE.conversations = await fetch("/api/conversations").then((r) => r.json());
+  const sel = document.getElementById("convoSelect");
+  sel.innerHTML = "";
+  if (!STATE.conversations.length) {
+    sel.innerHTML = '<option value="">(no conversations)</option>';
+    return;
+  }
+  STATE.conversations.forEach((c) => {
+    const opt = document.createElement("option");
+    opt.value = c.id;
+    opt.textContent = c.name;
+    sel.appendChild(opt);
+  });
+  if (!STATE.activeConversationId) STATE.activeConversationId = STATE.conversations[0].id;
+  sel.value = STATE.activeConversationId;
+  await loadMessages(STATE.activeConversationId);
+}
+async function loadMessages(conversationId) {
+  STATE.activeConversationId = conversationId;
+  STATE.messages = conversationId ? await fetch(`/api/conversations/${conversationId}/messages`).then((r) => r.json()) : [];
+  renderMessages();
+  updateTreeMarks();
+}
+function renderMessages() {
+  const host = document.getElementById("messages");
+  host.innerHTML = "";
+  if (!STATE.messages.length) {
+    host.innerHTML = '<div class="empty">Ask a question below to get started.</div>';
+    return;
+  }
+  for (const m of STATE.messages) {
+    const div = document.createElement("div");
+    div.className = "msg " + m.role;
+    if (m.role === "user") {
+      div.textContent = m.text;
+    } else if (m.payload) {
+      (m.payload.results || []).forEach((r) => renderResult(r, div));
+      if (m.payload.warnings && m.payload.warnings.length) {
+        const w = document.createElement("div");
+        w.className = "warnings";
+        w.innerHTML = "⚠ " + m.payload.warnings.map(escapeHtml).join("<br>⚠ ");
+        div.appendChild(w);
+      }
+    }
+    host.appendChild(div);
+  }
+  host.scrollTop = host.scrollHeight;
+}
+async function newConversation() {
+  const name = prompt("Name this conversation:", "New conversation");
+  if (name === null) return;
+  const c = await fetch("/api/conversations", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  }).then((r) => r.json());
+  await loadConversations();
+  document.getElementById("convoSelect").value = c.id;
+  await loadMessages(c.id);
+}
+async function sendMessage() {
+  const input = document.getElementById("chatInput");
+  const question = input.value.trim();
+  if (!question || !STATE.activeConversationId) return;
+  input.value = "";
+  STATE.messages.push({ role: "user", text: question });
+  renderMessages();
+
+  const stepEl = document.getElementById("stepIndicator");
+  stepEl.textContent = "";
+  const resp = await fetch("/api/chat", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ conversation_id: STATE.activeConversationId, question }),
+  });
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const parts = buf.split("\n\n");
+    buf = parts.pop();
+    for (const part of parts) {
+      if (!part.startsWith("data: ")) continue;
+      const evt = JSON.parse(part.slice(6));
+      if (evt.event === "step") {
+        stepEl.textContent = `${evt.step}${evt.status === "done" ? " ✓" : "…"}`;
+      } else if (evt.event === "done") {
+        stepEl.textContent = "";
+        STATE.messages.push({ role: "assistant", payload: evt });
+        renderMessages();
+        updateTreeMarks();
+      }
+    }
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Answers tab
+ * ------------------------------------------------------------------------- */
+async function loadAnswers() {
+  STATE.answers = await fetch("/api/answers").then((r) => r.json());
+  const host = document.getElementById("answersBody");
+  host.innerHTML = "";
+  if (!STATE.answers.length) {
+    host.innerHTML = '<div class="empty">No published answers yet.</div>';
+    return;
+  }
+  STATE.answers.forEach((a) => {
+    const row = document.createElement("div");
+    row.className = "answer-row";
+    row.innerHTML = `<div class="kind">${escapeHtml(a.kind)}</div>${escapeHtml(a.title || a.id)}`;
+    row.addEventListener("click", () => showAnswer(a.id));
+    host.appendChild(row);
+  });
+}
+async function showAnswer(answerId) {
+  const a = await fetch(`/api/answers/${answerId}`).then((r) => r.json());
+  switchTab("answers");
+  const host = document.getElementById("answersBody");
+  host.innerHTML = "";
+  const back = document.createElement("button");
+  back.className = "action";
+  back.textContent = "← All answers";
+  back.style.marginBottom = "10px";
+  back.addEventListener("click", loadAnswers);
+  host.appendChild(back);
+  (a.payload.results || []).forEach((r) => renderResult(r, host));
+  history.replaceState(null, "", `#answer=${answerId}`);
+}
+function switchTab(tab) {
+  document.getElementById("tabChat").classList.toggle("active", tab === "chat");
+  document.getElementById("tabAnswers").classList.toggle("active", tab === "answers");
+  document.getElementById("chatBody").style.display = tab === "chat" ? "flex" : "none";
+  document.getElementById("answersBody").style.display = tab === "answers" ? "block" : "none";
+}
+
+/* ---------------------------------------------------------------------------
+ * Search
+ * ------------------------------------------------------------------------- */
+let searchDebounce = null;
+function wireSearch() {
+  const box = document.getElementById("searchBox");
+  const results = document.getElementById("searchResults");
+  box.addEventListener("input", () => {
+    clearTimeout(searchDebounce);
+    const q = box.value.trim();
+    if (!q) { results.classList.remove("open"); return; }
+    searchDebounce = setTimeout(async () => {
+      const data = await fetch(`/api/search?q=${encodeURIComponent(q)}`).then((r) => r.json());
+      results.innerHTML = "";
+      if (!data.hits.length) {
+        results.innerHTML = '<div class="empty">No results.</div>';
+      } else {
+        data.hits.forEach((h) => {
+          const div = document.createElement("div");
+          div.className = "search-hit";
+          div.innerHTML = `<div class="hit-title">${escapeHtml(h.title)} (${h.year})</div>` +
+            `<div class="hit-snip">${h.snippet}</div>`;
+          div.addEventListener("click", () => {
+            setActiveDoc(h.doc_id, h.node_id);
+            results.classList.remove("open");
+            box.value = "";
+          });
+          results.appendChild(div);
+        });
+      }
+      results.classList.add("open");
+    }, 250);
+  });
+  document.addEventListener("click", (e) => {
+    if (!results.contains(e.target) && e.target !== box) results.classList.remove("open");
+  });
+}
+
+/* ---------------------------------------------------------------------------
+ * Resizable columns
+ * ------------------------------------------------------------------------- */
+function initResizer(handle, { target, cssVar, measure, dir, min, getMax }) {
+  handle.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    handle.setPointerCapture(e.pointerId);
+    handle.classList.add("dragging");
+    const startX = e.clientX;
+    const startW = measure();
+    const onMove = (ev) => {
+      let w = startW + (ev.clientX - startX) * dir;
+      w = Math.max(min, Math.min(getMax(), w));
+      target.style.setProperty(cssVar, w + "px");
+    };
+    const onUp = () => {
+      handle.classList.remove("dragging");
+      handle.releasePointerCapture(e.pointerId);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      try { localStorage.setItem("wkb" + cssVar, target.style.getPropertyValue(cssVar)); } catch (_) {}
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  });
+}
+function initLayout() {
+  const main = document.querySelector("main");
+  const left = document.querySelector(".left");
+  const leftTop = document.querySelector(".left-top");
+  const tocEl = document.querySelector(".toc");
+  try {
+    const lw = localStorage.getItem("wkb--left-w");
+    if (lw) main.style.setProperty("--left-w", lw);
+    const tw = localStorage.getItem("wkb--toc-w");
+    if (tw) leftTop.style.setProperty("--toc-w", tw);
+  } catch (_) {}
+  initResizer(document.getElementById("rzMain"), {
+    target: main, cssVar: "--left-w", dir: +1, min: 280,
+    measure: () => left.getBoundingClientRect().width,
+    getMax: () => Math.max(320, window.innerWidth - 360),
+  });
+  initResizer(document.getElementById("rzTree"), {
+    target: leftTop, cssVar: "--toc-w", dir: -1, min: 140,
+    measure: () => tocEl.getBoundingClientRect().width,
+    getMax: () => Math.max(150, leftTop.getBoundingClientRect().width - 150),
+  });
+}
+
+/* ---------------------------------------------------------------------------
+ * Boot
+ * ------------------------------------------------------------------------- */
+(async function boot() {
+  initLayout();
+  wireSearch();
+  await loadDocumentTree();
+  await loadConversations();
+
+  document.getElementById("tabChat").addEventListener("click", () => switchTab("chat"));
+  document.getElementById("tabAnswers").addEventListener("click", () => { switchTab("answers"); loadAnswers(); });
+  document.getElementById("newConvoBtn").addEventListener("click", newConversation);
+  document.getElementById("convoSelect").addEventListener("change", (e) => loadMessages(Number(e.target.value)));
+  document.getElementById("sendBtn").addEventListener("click", sendMessage);
+  document.getElementById("chatInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  });
+
+  const m = location.hash.match(/^#answer=(.+)$/);
+  if (m) showAnswer(m[1]);
+})();
+</script>
+</body>
+</html>

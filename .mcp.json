@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "wasp12b-kb": {
+      "command": ".venv/bin/python",
+      "args": ["kb/mcp_server.py"]
+    }
+  }
+}

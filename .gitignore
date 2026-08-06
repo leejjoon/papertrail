@@ -1,0 +1,22 @@
+.env
+paper_download/data/
+.venv/
+__pycache__/
+*.pyc
+.gstack/
+
+# Corpus + everything the pipeline derives from it: source paper list,
+# Marker-derived section-tree JSON/assets/classification, kb.sqlite, the
+# LLM-generated wiki, and ad-hoc published-answer exports. Code (kb/*.py,
+# webapp/, docs/spec/) is tracked; papers and anything derived from them
+# are not.
+wasp_12b_papers.yaml
+wasp_12b_papers.md
+kb/data/
+kb/wiki/
+answers/
+
+# Scratch / unrelated to this project
+chrome.md
+paper_download_howto.tgz
+.claude/scheduled_tasks.lock
