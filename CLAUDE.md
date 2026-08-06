@@ -8,11 +8,13 @@ before making structural changes; this file is operational orientation, not a sp
 ## Repo layout
 
 ```
-wasp_12b_papers.yaml        source corpus (210 entries, from ADS bibcode search)
+wasp_12b_papers.yaml        source corpus (210 entries, from ADS bibcode search) — gitignored
 paper_download/             Stage 0 — PDF acquisition (done, not touched again unless
                              the corpus grows). See paper_download/PAPER_DOWNLOAD_HOWTO.md
-                             and paper_download/data/FAILED_PDFS.md.
-kb/                         the pipeline + MCP server
+                             and paper_download/data/FAILED_PDFS.md. Scripts are tracked;
+                             paper_download/data/ (PDFs, Marker JSON) is gitignored.
+kb/                         the pipeline + MCP server (code tracked; everything below
+                             that's generated from paper content is gitignored)
   corpus.yaml                taxonomy, wiki heading contract, model env-var names
   config.py                   env vars, paths — mirrors paper_download/config.py
   adapters/wasp12b.py         metadata adapter (wraps paper_download/config.load_papers())
@@ -22,9 +24,10 @@ kb/                         the pipeline + MCP server
   topic_pages.py               Stage D: cross-paper cited topic pages + index (SYNTH_MODEL)
   build_index.py               Stage E: builds kb/data/kb.sqlite
   mcp_server.py                MCP server, 9 tools (see docs/spec/04_mcp.md)
-  data/                        sections/, assets/, classification/, kb.sqlite (gitignored)
-  wiki/                        papers/*.md, topics/*.md, index.md (committed — LLM prose,
-                               not raw PDF text)
+  data/                        sections/, assets/, classification/, kb.sqlite — gitignored
+  wiki/                        papers/*.md, topics/*.md, index.md — LLM prose derived from
+                               paper content, gitignored (each pipeline run regenerates it
+                               from kb/data/ + the corpus; not the durable artifact)
 webapp/                      FastAPI + SPA — viewer, search, chat, answer store
   app/{config,registry,renderer,answer,store,search,chat,main}.py
   static/index.html            single-file SPA (vanilla JS, no build step)
@@ -33,8 +36,15 @@ docs/spec/                   00_overview -> 05_adoption — the actual design do
 .mcp.json                    registers kb/mcp_server.py as "wasp12b-kb"
 answers/                     ad-hoc markdown exports of published answers (not auto-managed
                              — someone writes here by hand/agent when they want a
-                             shareable copy outside kb.sqlite; not required workflow)
+                             shareable copy outside kb.sqlite; not required workflow) —
+                             gitignored, same reasoning as kb/wiki/
 ```
+
+Git tracks code and design docs only (`kb/*.py`, `webapp/`, `paper_download/*.py`,
+`docs/spec/`, this file, `.mcp.json`, the skill) — no papers and nothing derived from
+paper content. Anyone cloning the repo needs to supply `wasp_12b_papers.yaml` and rerun
+the pipeline (`paper_download/` → `kb/build_sections.py` → ... → `kb/build_index.py`) to
+regenerate `kb/data/`, `kb/wiki/`, and `kb/data/kb.sqlite` locally.
 
 ## Running things
 
