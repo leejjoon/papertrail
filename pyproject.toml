@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "papertrail"
+version = "0.1.0"
+description = "Marker JSON -> section tree -> classification -> wiki -> SQLite/FTS -> web UI + MCP, for any corpus of documents that cite each other."
+requires-python = ">=3.11"
+dependencies = [
+    "pyyaml>=6",
+    "python-dotenv>=1.0",
+    "beautifulsoup4>=4.12",
+    "tqdm>=4.66",
+    "openai>=1.0",
+]
+
+[project.optional-dependencies]
+web = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "markdown>=3.5",
+]
+mcp = [
+    # mcp_server.py uses mcp.server.mcpserver.MCPServer + run(transport=,
+    # stateless_http=) — documented as 2.x-only, incompatible with 1.x's
+    # mcp.server.fastmcp.FastMCP. A bare >=2 would break silently on 3.x.
+    "mcp>=2.0,<3",
+]
+all = ["papertrail[web,mcp]"]
+dev = ["pytest>=8", "ruff"]
+
+[project.scripts]
+papertrail = "papertrail.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/papertrail"]
