@@ -35,7 +35,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Iterator
 
-from . import _legacy_config as config
+from ..config import Settings, load_settings
 from .nodes import _flatten_by_id, build_toc_outline
 from .renderer import render_doc_html
 
@@ -95,9 +95,15 @@ def ads_url(doc_id: str) -> str | None:
 
 
 class CorpusRegistry:
-    """Lazy, cached view over kb.sqlite + kb/data/sections/*.json."""
+    """Lazy, cached view over kb.sqlite + <corpus>/data/sections/*.json.
 
-    def __init__(self):
+    `settings` defaults to `load_settings()` (env/cwd-resolved) so
+    `CorpusRegistry()` keeps working with no arguments — kb/mcp_server.py
+    still constructs it that way until Step 5 passes settings through
+    explicitly from `build_server`."""
+
+    def __init__(self, settings: Settings | None = None):
+        self.settings = settings or load_settings()
         self._doc_cache: dict[str, Doc] = {}
         self._doc_tree: dict | None = None
         self._meta_by_id: dict[str, sqlite3.Row] = {}
@@ -105,7 +111,7 @@ class CorpusRegistry:
         self._load_meta()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(f"file:{config.KB_SQLITE}?mode=ro", uri=True)
+        conn = sqlite3.connect(f"file:{self.settings.sqlite_path}?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
         return conn
 
@@ -131,7 +137,7 @@ class CorpusRegistry:
             return Doc(doc_id=doc_id, doc_name=row["title"] or doc_id,
                        label=derive_label(doc_id, row["year"]), has_fulltext=False,
                        authors=authors, year=row["year"], journal=row["journal"] or "")
-        path = config.SECTIONS_DIR / f"{doc_id}.json"
+        path = self.settings.sections_dir / f"{doc_id}.json"
         tree = json.loads(path.read_text(encoding="utf-8"))
         return Doc(
             doc_id=doc_id,

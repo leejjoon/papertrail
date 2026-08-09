@@ -2,10 +2,10 @@
 a thin result set) -> CHAT_MODEL answer (+ optional one-round context
 escalation) -> validate_and_enrich -> persist.
 
-`stream_chat()` is a generator so main.py's SSE endpoint can forward each step
-as it happens (kasi_papers_analysis's `ask` tool + spherex-chatbot's SSE step
-pattern, combined — see docs/spec/03_webapp.md). The final yielded item is
-always `{"event": "done", ...enriched_payload}`; every other item is
+`stream_chat()` is a generator so the SSE endpoint (web/app.py) can forward
+each step as it happens (kasi_papers_analysis's `ask` tool + spherex-chatbot's
+SSE step pattern, combined — see docs/spec/03_webapp.md). The final yielded
+item is always `{"event": "done", ...enriched_payload}`; every other item is
 `{"event": "step", "step": ..., "status": "start"|"done"}`.
 
 Context escalation: retrieval is paragraph-granular, and a single paragraph
@@ -27,10 +27,12 @@ from typing import Iterator
 
 from openai import OpenAI
 
-from . import config, store
-from .answer import InvalidCitationsError, find_uncited_author_year_mentions, validate_and_enrich
-from .registry import CorpusRegistry, context_window
-from .search import search_nodes
+from ..config import Settings
+from ..core.citations import find_uncited_author_year_mentions, validate_and_enrich
+from ..core.nodes import context_window
+from ..core.registry import CorpusRegistry
+from ..core.search import search_nodes
+from ..core.store import Store
 
 # Bounds on the one-shot context-escalation round (see stream_chat) — the
 # model can widen what it was already shown, never fetch new corpus text, and
@@ -39,8 +41,6 @@ MAX_CONTEXT_REQUESTS = 4       # requests honored per escalation round
 MAX_CONTEXT_WINDOW = 3         # clamp on the requested sibling count
 EXPANDED_CHAR_BUDGET = 4000    # vs. the default 1000 — expansion would be
                                # pointless if immediately truncated back down
-
-_client = OpenAI(base_url=config.BASE_URL, api_key=config.API_KEY)
 
 SYSTEM_PROMPT = (
     "You answer questions about a knowledge base of papers mentioning the "
@@ -116,10 +116,10 @@ def _condense_history(messages: list[dict], max_turns: int = 6) -> str:
     return "\n".join(lines)
 
 
-def _rewrite_query(question: str) -> str | None:
+def _rewrite_query(client: OpenAI, settings: Settings, question: str) -> str | None:
     try:
-        resp = _client.chat.completions.create(
-            model=config.BULK_MODEL,
+        resp = client.chat.completions.create(
+            model=settings.bulk_model,
             messages=[{"role": "user", "content":
                        "Rewrite this question as 5-8 search keywords "
                        "(astronomy jargon, synonyms). Output only the "
@@ -188,19 +188,22 @@ def _expand_excerpts(registry: CorpusRegistry, hits: list[dict],
     return expanded
 
 
-def stream_chat(registry: CorpusRegistry, conversation_id: int, question: str) -> Iterator[dict]:
+def stream_chat(settings: Settings, registry: CorpusRegistry, store: Store,
+                conversation_id: int, question: str) -> Iterator[dict]:
+    client = OpenAI(base_url=settings.base_url, api_key=settings.api_key)
+
     yield {"event": "step", "step": "history", "status": "start"}
     history_messages = store.list_messages(conversation_id)
     history_text = _condense_history(history_messages)
     yield {"event": "step", "step": "history", "status": "done"}
 
     yield {"event": "step", "step": "search", "status": "start"}
-    hits = search_nodes(question, limit=12)
+    hits = search_nodes(settings, question, limit=12)
     if len(hits) < 3:
         yield {"event": "step", "step": "rewrite", "status": "start"}
-        rewritten = _rewrite_query(question)
+        rewritten = _rewrite_query(client, settings, question)
         if rewritten:
-            hits = search_nodes(f"{question} {rewritten}", limit=12)
+            hits = search_nodes(settings, f"{question} {rewritten}", limit=12)
         yield {"event": "step", "step": "rewrite", "status": "done"}
     yield {"event": "step", "step": "search", "status": "done", "hit_count": len(hits)}
 
@@ -222,8 +225,8 @@ def stream_chat(registry: CorpusRegistry, conversation_id: int, question: str) -
                    f"Excerpts:\n\n{excerpts_block}\n\nQuestion: {question}"
 
     def call_model(content: str) -> dict | None:
-        resp = _client.chat.completions.create(
-            model=config.CHAT_MODEL,
+        resp = client.chat.completions.create(
+            model=settings.chat_model,
             messages=[{"role": "system", "content": SYSTEM_PROMPT},
                       {"role": "user", "content": content}],
             max_tokens=2000,

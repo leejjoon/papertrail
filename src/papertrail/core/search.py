@@ -2,20 +2,16 @@
 
 Same conventions as kb/mcp_server.py's search helpers (kept in sync
 deliberately, not shared by import, since the MCP server and this web app are
-independently deployable processes that only agree via the sqlite file).
+independently deployable processes that only agree via the sqlite file) —
+merging the two hand-synced copies is Step 7 of the papertrail migration,
+alongside the doc_facets schema change that forces editing both anyway.
 """
 from __future__ import annotations
 
 import re
 import sqlite3
 
-from . import _legacy_config as config
-
-
-def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(f"file:{config.KB_SQLITE}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
-    return conn
+from ..config import Settings
 
 
 def fts_escape(query: str) -> str:
@@ -23,8 +19,9 @@ def fts_escape(query: str) -> str:
     return " OR ".join(f'"{t}"' for t in terms) if terms else '""'
 
 
-def search_nodes(query: str, limit: int = 12) -> list[dict]:
-    conn = _connect()
+def search_nodes(settings: Settings, query: str, limit: int = 12) -> list[dict]:
+    conn = sqlite3.connect(f"file:{settings.sqlite_path}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
             """SELECT n.doc_id, n.node_id, n.block_type, n.parent_title, d.title, d.year,
