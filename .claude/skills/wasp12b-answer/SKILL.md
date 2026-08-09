@@ -13,6 +13,8 @@ Call `list_papers()` with no arguments first if you don't already know the corpu
 
 Never cite a `(doc_id, node_id)` pair you have not actually read. For every candidate hit from search, call `get_section(doc_id, node_id)` (or `get_paper(doc_id)` for a fuller view, `get_figure_image(doc_id, node_id)` if a figure matters) before using it as a citation. `get_section` on a heading node returns the whole subtree; on a leaf it returns that node plus its parent heading for context — use whichever fits what you're citing.
 
+A single paragraph read alone can be ambiguous — a pronoun or comparison that points outside itself ("this discrepancy," "the equilibrium case," a bare ratio/number with no stated assumptions), or a term whose exact meaning is paper-specific (e.g. what "C/O ratio" assumes, what counts as a "detection" vs. "tentative"). If a node's text looks like it depends on something not in front of you, re-call `get_section(doc_id, node_id, context=N)` with a larger `N` before citing it — don't guess at the antecedent, and don't cite a node whose claim you can't actually verify from what you've read.
+
 ## 3. Draft with a hard citation rule
 
 Every claim needs an inline `[n]` marker — no exceptions, including when you name a specific study by author/year in your prose. **Never write an author-year mention as a substitute for `[n]`; always attach both, to that exact sentence:**

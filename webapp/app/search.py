@@ -27,7 +27,7 @@ def search_nodes(query: str, limit: int = 12) -> list[dict]:
     conn = _connect()
     try:
         rows = conn.execute(
-            """SELECT n.doc_id, n.node_id, n.block_type, d.title, d.year,
+            """SELECT n.doc_id, n.node_id, n.block_type, n.parent_title, d.title, d.year,
                       snippet(chunks_fts, 0, '**', '**', ' … ', 40) AS snip,
                       n.text AS full_text,
                       bm25(chunks_fts) AS score

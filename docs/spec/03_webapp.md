@@ -89,11 +89,21 @@ Flow:
 4. `step: answer` — `CHAT_MODEL`, system prompt: "answer only from the provided
    `(doc_id, node_id)` excerpts below; every claim needs a `[n]`; if the excerpts don't
    support an answer, say so" + condensed history + the up-to-12 retrieved node texts
-   labeled `[n] (doc_id, node_id): <text>`.
-5. `step: validate` — `validate_and_enrich(payload, strict=false)` (lenient: a
+   labeled `[n] (doc_id, node_id, parent section title): <text>`.
+5. `step: context` (conditional) — a single paragraph-level excerpt is often ambiguous
+   read alone (unresolved pronoun/comparison, a paper-specific term undefined in that
+   node); rather than depend on this gateway's unverified tool-calling support, the model
+   may return `{"need_context": [{doc_id, node_id, context}]}` instead of a final answer.
+   If so, widen up to 4 of the already-retrieved excerpts (bounded `context` window) via
+   the same sibling-window logic `get_section(..., context=N)` uses (kb/mcp_server.py),
+   and re-call **once** — same one-shot, gated-re-query shape as `step: rewrite` above,
+   not an open-ended agentic loop. `validate_and_enrich`'s guarantee is unchanged by this:
+   it still only proves a citation resolves, never that its text was read with enough
+   context to support the claim beside it.
+6. `step: validate` — `validate_and_enrich(payload, strict=false)` (lenient: a
    hallucinated citation becomes a warning shown in the UI, not a failed response — a
    user should still see the prose even if one citation didn't resolve).
-6. Persist: insert into `answers` (`kind=chat_message`), insert a `messages` row
+7. Persist: insert into `answers` (`kind=chat_message`), insert a `messages` row
    (`role=assistant`, `answer_id=...`), stream the terminal `done` event with the full
    enriched payload.
 

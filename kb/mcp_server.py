@@ -49,7 +49,7 @@ from kb import config
 # citation-validation logic.
 sys.path.insert(0, str(Path(__file__).parent.parent / "webapp"))
 from app.answer import InvalidCitationsError, validate_and_enrich
-from app.registry import CorpusRegistry
+from app.registry import CorpusRegistry, context_window
 
 _TRANSPORT = os.getenv("MCP_TRANSPORT", "stdio")
 _HTTP = _TRANSPORT in ("http", "streamable-http")
@@ -210,35 +210,32 @@ def _find_node(nodes: list[dict], node_id: str, parent_title: str | None = None)
     return None, None
 
 
-def _concat_subtree(node: dict) -> str:
-    if node["kind"] == "leaf":
-        return node["text"]
-    parts = [f"## {node['title']}"]
-    for child in node["nodes"]:
-        parts.append(_concat_subtree(child))
-    return "\n\n".join(parts)
-
-
 @mcp.tool()
-def get_section(doc_id: str, node_id: str) -> str:
+def get_section(doc_id: str, node_id: str, context: int = 0) -> str:
     """Read one node of a paper's section tree. If node_id is a heading
     (container), returns that whole subtree's text concatenated. If node_id is
     a leaf (one paragraph/table/figure/equation/footnote/reference), returns
     that node's own content prefixed with its parent heading's title for
     orientation — a single paragraph isn't read fully decontextualized. For a
     table node the raw HTML is returned as-is; for a figure node the caption
-    is returned with a pointer to get_figure_image for the actual picture."""
+    is returned with a pointer to get_figure_image for the actual picture.
+
+    `context`: how many sibling nodes to include before and after, within the
+    same section only (default 0 — just the node itself, unchanged from
+    before). Use this if the leaf's meaning looks ambiguous read alone — a
+    pronoun or comparison ("this discrepancy," "the equilibrium case," a bare
+    ratio with no stated assumptions) that points outside the node — by
+    re-calling with a larger context instead of guessing. The cited node
+    itself is still just this node_id; surrounding text is marked as context
+    only, not part of what you'd cite."""
     tree = _load_section_tree(doc_id)
     if tree is None:
         return f"No section tree for {doc_id} (no full text, or doc_id not found)."
-    node, parent_title = _find_node(tree["structure"], node_id)
+    node, _ = _find_node(tree["structure"], node_id)
     if node is None:
         return f"Unknown node_id '{node_id}' in {doc_id}."
-    if node["kind"] == "container":
-        return _concat_subtree(node)
-    prefix = f"[{parent_title}] " if parent_title else ""
-    body = prefix + node["text"]
-    if node["block_type"] == "figure":
+    body = context_window(tree["structure"], node_id, context)
+    if node.get("block_type") == "figure":
         body += "\n\n(This is a figure caption. Call get_figure_image(doc_id, node_id) for the actual image.)"
     return body
 

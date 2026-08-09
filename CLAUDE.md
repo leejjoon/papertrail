@@ -96,6 +96,16 @@ pipeline runs are fixed; the existing corpus was not regenerated (real cost trad
 user's call). Don't assume every claim in an existing wiki page is cited just because it
 reads fluently — spot-check before treating one as ground truth for something important.
 
+**A resolving `[n]` also doesn't mean the node was read in enough context.** Retrieval is
+paragraph-granular, and a single paragraph read alone is often ambiguous — an unresolved
+pronoun/comparison ("this discrepancy," "the equilibrium case"), or a paper-specific term
+undefined in that node (e.g. what a paper's "C/O ratio" assumes). `validate_and_enrich()`
+only proves a citation resolves to a real node, never that its text supports the claim
+next to it. Two escalation paths exist: `kb/mcp_server.py`'s `get_section(doc_id, node_id,
+context=N)` widens with sibling nodes (agent tool-calling); chat's `need_context` field
+(`webapp/app/chat.py`) does the same for the interactive path, bounded to one round. Both
+share `webapp/app/registry.py`'s `context_window()` — same sibling-window semantics.
+
 ## Skills
 
 `/wasp12b-answer` — drives the MCP server's search → read → cite → validate → publish

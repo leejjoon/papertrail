@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from . import config, store
 from .answer import InvalidCitationsError, validate_and_enrich
 from .chat import stream_chat
-from .registry import CorpusRegistry, build_toc_outline, section_payload
+from .registry import CorpusRegistry, ads_url, author_year_label, build_toc_outline, section_payload
 from .search import search_nodes
 
 logging.basicConfig(level=logging.INFO)
@@ -62,12 +62,17 @@ def documents():
 @app.get("/api/documents/{doc_id}")
 def document(doc_id: str):
     doc = _doc_or_404(doc_id)
+    # author_year/journal/ads_url — same fields validate_and_enrich() adds to a
+    # citation (see answer.py) — so the sticky doc-header the frontend renders
+    # from this payload matches the reference-list format exactly.
+    header = {"author_year": author_year_label(doc.authors, doc.year),
+              "journal": doc.journal, "ads_url": ads_url(doc.doc_id)}
     if not doc.has_fulltext:
         return {"doc_id": doc.doc_id, "doc_name": doc.doc_name, "label": doc.label,
-                "has_fulltext": False, "tree": [], "html": ""}
+                "has_fulltext": False, "tree": [], "html": "", **header}
     return {"doc_id": doc.doc_id, "doc_name": doc.doc_name, "label": doc.label,
             "has_fulltext": True, "tree": build_toc_outline(doc.tree["structure"]),
-            "html": doc.html}
+            "html": doc.html, **header}
 
 
 @app.get("/api/documents/{doc_id}/sections/{node_id}")
