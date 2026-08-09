@@ -1,0 +1,89 @@
+[
+  {
+    "node_id": "0001",
+    "kind": "container",
+    "title": "Methods",
+    "level": 1,
+    "nodes": [
+      {
+        "node_id": "0002",
+        "kind": "container",
+        "title": "Observations",
+        "level": 2,
+        "nodes": [
+          {
+            "node_id": "0003",
+            "kind": "leaf",
+            "block_type": "paragraph",
+            "text": "Nested paragraph under Observations.",
+            "page": 0,
+            "source_block_ids": [
+              "/page/0/text/0"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "node_id": "0004",
+    "kind": "container",
+    "title": "References",
+    "level": 1,
+    "nodes": [
+      {
+        "node_id": "0005",
+        "kind": "leaf",
+        "block_type": "reference",
+        "text": "Smith, J. 2020, ApJ, 900, 1",
+        "list_index": 0,
+        "page": 0,
+        "source_block_ids": [
+          "/page/0/listgroup/0"
+        ]
+      },
+      {
+        "node_id": "0006",
+        "kind": "leaf",
+        "block_type": "reference",
+        "text": "Jones, A. & Lee, B. 2021, A&A, 650, A10",
+        "list_index": 1,
+        "page": 0,
+        "source_block_ids": [
+          "/page/0/listgroup/0"
+        ]
+      },
+      {
+        "node_id": "0007",
+        "kind": "leaf",
+        "block_type": "reference",
+        "text": "Doe, C. 2019, MNRAS, 480, 100",
+        "list_index": 2,
+        "page": 0,
+        "source_block_ids": [
+          "/page/0/listgroup/0"
+        ]
+      },
+      {
+        "node_id": "0008",
+        "kind": "leaf",
+        "block_type": "code",
+        "text": "```\nprint('hello')\n```",
+        "page": 0,
+        "source_block_ids": [
+          "/page/0/code/0"
+        ]
+      },
+      {
+        "node_id": "0009",
+        "kind": "leaf",
+        "block_type": "paragraph",
+        "text": "Recursed-into unknown block type.",
+        "page": 0,
+        "source_block_ids": [
+          "/page/0/unknown/0/text/0"
+        ]
+      }
+    ]
+  }
+]

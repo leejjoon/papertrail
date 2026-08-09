@@ -20,3 +20,5 @@ answers/
 chrome.md
 paper_download_howto.tgz
 .claude/scheduled_tasks.lock
+.migration_baselines/
+kb.sqlite.bak

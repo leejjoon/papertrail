@@ -1,0 +1,33 @@
+{
+  "page_count": 1,
+  "json": {
+    "children": [
+      {
+        "block_type": "Page",
+        "id": "/page/0",
+        "children": [
+          {"block_type": "SectionHeader", "id": "/page/0/sectionheader/0",
+           "html": "<h1>Methods</h1>", "page": 0},
+          {"block_type": "SectionHeader", "id": "/page/0/sectionheader/1",
+           "html": "<h2>Observations</h2>", "page": 0},
+          {"block_type": "Text", "id": "/page/0/text/0",
+           "html": "<p>Nested paragraph under Observations.</p>", "page": 0},
+          {"block_type": "SectionHeader", "id": "/page/0/sectionheader/2",
+           "html": "<h1>References</h1>", "page": 0},
+          {"block_type": "TableOfContents", "id": "/page/0/toc/0",
+           "html": "<p>ignored</p>", "page": 0},
+          {"block_type": "Picture", "id": "/page/0/picture/0", "page": 0},
+          {"block_type": "ListGroup", "id": "/page/0/listgroup/0", "page": 0,
+           "html": "<p>Smith, J. 2020, ApJ, 900, 1<br/>Jones, A. &amp; Lee, B. 2021, A&amp;A, 650, A10<br/>Doe, C. 2019, MNRAS, 480, 100</p>"},
+          {"block_type": "Code", "id": "/page/0/code/0", "page": 0,
+           "html": "print('hello')"},
+          {"block_type": "TextInlineMath", "id": "/page/0/unknown/0", "page": 0,
+           "children": [
+             {"block_type": "Text", "id": "/page/0/unknown/0/text/0",
+              "html": "<p>Recursed-into unknown block type.</p>", "page": 0}
+           ]}
+        ]
+      }
+    ]
+  }
+}

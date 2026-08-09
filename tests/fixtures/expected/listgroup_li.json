@@ -1,0 +1,32 @@
+[
+  {
+    "node_id": "0001",
+    "kind": "container",
+    "title": "References",
+    "level": 1,
+    "nodes": [
+      {
+        "node_id": "0002",
+        "kind": "leaf",
+        "block_type": "reference",
+        "text": "Smith, J. 2020, ApJ, 900, 1",
+        "list_index": 0,
+        "page": 0,
+        "source_block_ids": [
+          "/page/0/listgroup/0"
+        ]
+      },
+      {
+        "node_id": "0003",
+        "kind": "leaf",
+        "block_type": "reference",
+        "text": "Jones, A. & Lee, B. 2021, A&A, 650, A10",
+        "list_index": 1,
+        "page": 0,
+        "source_block_ids": [
+          "/page/0/listgroup/0"
+        ]
+      }
+    ]
+  }
+]

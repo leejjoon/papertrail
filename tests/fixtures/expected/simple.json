@@ -1,0 +1,65 @@
+[
+  {
+    "node_id": "0001",
+    "kind": "container",
+    "title": "Introduction",
+    "level": 1,
+    "nodes": [
+      {
+        "node_id": "0002",
+        "kind": "leaf",
+        "block_type": "paragraph",
+        "text": "This is **bold** and *italic* text with a <sup>2</sup> superscript.",
+        "page": 0,
+        "source_block_ids": [
+          "/page/0/text/0"
+        ]
+      },
+      {
+        "node_id": "0003",
+        "kind": "leaf",
+        "block_type": "figure",
+        "text": "Figure 1: A sample figure.",
+        "page": 0,
+        "source_block_ids": [
+          "/page/0/caption/0",
+          "/page/0/figure/0"
+        ],
+        "image_asset": "simple/page_0_figure_0.jpeg",
+        "caption": "Figure 1: A sample figure."
+      },
+      {
+        "node_id": "0004",
+        "kind": "leaf",
+        "block_type": "table",
+        "text": "<table><tr><td>A</td><td>B</td></tr></table>",
+        "page": 0,
+        "source_block_ids": [
+          "/page/0/caption/1",
+          "/page/0/table/0"
+        ],
+        "caption": "Table 1: A sample table."
+      },
+      {
+        "node_id": "0005",
+        "kind": "leaf",
+        "block_type": "equation",
+        "text": "$$\nE=mc^2\n$$",
+        "page": 0,
+        "source_block_ids": [
+          "/page/0/equation/0"
+        ]
+      },
+      {
+        "node_id": "0006",
+        "kind": "leaf",
+        "block_type": "footnote",
+        "text": "This is a footnote.",
+        "page": 0,
+        "source_block_ids": [
+          "/page/0/footnote/0"
+        ]
+      }
+    ]
+  }
+]

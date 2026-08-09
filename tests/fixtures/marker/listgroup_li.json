@@ -1,0 +1,17 @@
+{
+  "page_count": 1,
+  "json": {
+    "children": [
+      {
+        "block_type": "Page",
+        "id": "/page/0",
+        "children": [
+          {"block_type": "SectionHeader", "id": "/page/0/sectionheader/0",
+           "html": "<h1>References</h1>", "page": 0},
+          {"block_type": "ListGroup", "id": "/page/0/listgroup/0", "page": 0,
+           "html": "<ol><li>Smith, J. 2020, ApJ, 900, 1</li><li>Jones, A. &amp; Lee, B. 2021, A&amp;A, 650, A10</li></ol>"}
+        ]
+      }
+    ]
+  }
+}
