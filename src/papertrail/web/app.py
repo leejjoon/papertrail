@@ -44,7 +44,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     registry = CorpusRegistry(settings)
     store = Store(settings)
 
-    app = FastAPI(title="WASP-12b Knowledge Base")
+    app = FastAPI(title=settings.corpus.title)
     app.state.settings = settings
     app.state.registry = registry
     app.state.store = store
@@ -57,8 +57,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/health")
     def health():
-        return {"status": "ok", "corpus": "wasp12b",
+        return {"status": "ok", "corpus": settings.corpus.name,
                 "doc_count": len(registry.all_doc_ids())}
+
+    @app.get("/api/corpus")
+    def corpus_info():
+        """Branding + facet metadata for a no-build-step SPA (papertrail
+        migration Step 9, Seam 4) — fetched once at boot so the page never
+        hardcodes a corpus's name/title/glyph, and doubles as the source of
+        facet labels/values for any future filter UI (Seam 3's taxonomy is
+        already structured for this)."""
+        tax = settings.corpus.taxonomy
+        nav = settings.corpus.navigation
+        return {
+            "name": settings.corpus.name, "title": settings.corpus.title,
+            "description": settings.corpus.description, "glyph": settings.corpus.glyph,
+            "facets": {name: {"label": spec.label, "values": spec.values, "multi": spec.multi}
+                      for name, spec in tax.items()},
+            "navigation": {"tree_facet": nav.tree_facet, "table_columns": nav.table_columns},
+        }
 
     @app.post("/api/reload")
     def reload_registry():

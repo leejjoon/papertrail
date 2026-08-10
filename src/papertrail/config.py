@@ -52,6 +52,23 @@ class Corpus:
         return (self.raw.get("corpus") or {}).get("name") or self.root.name
 
     @property
+    def title(self) -> str:
+        """Display title for branding (web app <title>/<h1>, MCP index page,
+        etc.) — papertrail migration Step 9, Seam 4. Was hardcoded as
+        "WASP-12b Knowledge Base" in five separate places; now one
+        corpus.yaml value, falling back to a generic default for a corpus
+        that doesn't set one."""
+        return (self.raw.get("corpus") or {}).get("title") or f"{self.name} Knowledge Base"
+
+    @property
+    def glyph(self) -> str:
+        return (self.raw.get("corpus") or {}).get("glyph") or ""
+
+    @property
+    def description(self) -> str:
+        return (self.raw.get("corpus") or {}).get("description") or ""
+
+    @property
     def taxonomy(self):
         from .taxonomy import load_taxonomy
         return load_taxonomy(self)

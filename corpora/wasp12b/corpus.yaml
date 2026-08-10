@@ -1,6 +1,8 @@
 corpus:
   name: wasp12b
+  title: WASP-12b Knowledge Base
   description: Papers mentioning WASP-12 b
+  glyph: "✦"
 
 source:
   marker_dir: ../../paper_download/data/marker

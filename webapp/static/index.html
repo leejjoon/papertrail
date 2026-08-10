@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>WASP-12b Knowledge Base</title>
+<title>Knowledge Base</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
@@ -190,7 +190,7 @@
 </head>
 <body>
 <header>
-  <h1><span class="glyph">✦</span>WASP-12b Knowledge Base</h1>
+  <h1><span class="glyph" id="corpusGlyph">✦</span><span id="corpusTitle">Knowledge Base</span></h1>
   <div class="spacer"></div>
   <input type="text" id="searchBox" placeholder="Search papers…">
 </header>
@@ -816,6 +816,19 @@ function initLayout() {
  * Boot
  * ------------------------------------------------------------------------- */
 (async function boot() {
+  // Branding (papertrail migration Step 9, Seam 4) — fetched, not
+  // hardcoded, so this single-file SPA never bakes in one corpus's name.
+  // A brief neutral "Knowledge Base" placeholder (set directly in the
+  // HTML) shows until this resolves rather than flashing the wrong name.
+  try {
+    const corpus = await fetch("/api/corpus").then((r) => r.json());
+    if (corpus.title) {
+      document.title = corpus.title;
+      document.getElementById("corpusTitle").textContent = corpus.title;
+    }
+    if (corpus.glyph) document.getElementById("corpusGlyph").textContent = corpus.glyph;
+  } catch (e) { /* keep the neutral placeholder */ }
+
   initLayout();
   wireSearch();
   await loadDocumentTree();

@@ -175,7 +175,7 @@ class CorpusRegistry:
         if stubs:
             children.append({"title": "Metadata only (no full text)",
                              "children": sorted(stubs, key=lambda d: (d["year"] or 0, d["doc_id"]))})
-        return {"title": "WASP-12b Knowledge Base", "children": children}
+        return {"title": self.settings.corpus.title, "children": children}
 
     def all_doc_ids(self) -> list[str]:
         return list(self._meta_by_id.keys())

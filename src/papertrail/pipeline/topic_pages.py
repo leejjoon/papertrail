@@ -368,7 +368,7 @@ def build_index(settings: Settings, client, all_docs: list[dict], groups_by_face
         else:
             tqdm.write(f"  index.md prose FAILED: {last_error} — writing stats-only index")
 
-    lines = ["# WASP-12b Knowledge Base\n"]
+    lines = [f"# {settings.corpus.title}\n"]
     if prose:
         lines.append(prose + "\n")
     for i, (facet, groups) in enumerate(groups_by_facet.items()):
