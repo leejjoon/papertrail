@@ -7,7 +7,7 @@ section). Pinned here so the papertrail extraction can move them into
 core/nodes.py and prove byte-identical behavior against a synthetic tree
 rather than needing the real corpus loaded.
 """
-from app.registry import concat_subtree, context_window, find_node_with_siblings
+from papertrail.core.nodes import concat_subtree, context_window, find_node_with_siblings
 
 STRUCTURE = [
     {"node_id": "h1", "kind": "container", "title": "Intro", "nodes": [

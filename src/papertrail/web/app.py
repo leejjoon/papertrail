@@ -25,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from ..config import Settings, load_settings
 from ..core.citations import InvalidCitationsError, validate_and_enrich
 from ..core.nodes import build_toc_outline
-from ..core.registry import CorpusRegistry, ads_url, author_year_label, section_payload
+from ..core.registry import CorpusRegistry, section_payload
 from ..core.search import search_nodes
 from ..core.store import Store
 from .chat import stream_chat
@@ -74,12 +74,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/documents/{doc_id}")
     def document(doc_id: str):
         doc = _doc_or_404(doc_id)
-        # author_year/journal/ads_url — same fields validate_and_enrich() adds
-        # to a citation (see citations.py) — so the sticky doc-header the
-        # frontend renders from this payload matches the reference-list
-        # format exactly.
-        header = {"author_year": author_year_label(doc.authors, doc.year),
-                  "journal": doc.journal, "ads_url": ads_url(doc.doc_id)}
+        # reference_label/journal/external_links — same fields
+        # validate_and_enrich() adds to a citation (see citations.py) — so
+        # the sticky doc-header the frontend renders from this payload
+        # matches the reference-list format exactly.
+        header = {"reference_label": registry.style.reference_label(doc.ref()),
+                  "journal": doc.journal,
+                  "external_links": [{"label": l.label, "url": l.url}
+                                     for l in registry.style.external_links(doc.ref())]}
         if not doc.has_fulltext:
             return {"doc_id": doc.doc_id, "doc_name": doc.doc_name, "label": doc.label,
                     "has_fulltext": False, "tree": [], "html": "", **header}
@@ -171,7 +173,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail="invalid JSON body")
         title = payload.pop("title", None) if isinstance(payload, dict) else None
         try:
-            enriched = validate_and_enrich(payload, registry.docs, strict=strict)
+            enriched = validate_and_enrich(payload, registry.docs, registry.style, strict=strict)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         except InvalidCitationsError as exc:

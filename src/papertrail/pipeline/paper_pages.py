@@ -30,6 +30,7 @@ from tqdm import tqdm
 from ..config import Settings, load_settings
 from ..core.citations import find_uncited_author_year_mentions
 from ..core.nodes import iter_leaves
+from ..identity import CitationStyle, DocRef, load_citation_style
 from ..textutils import slugify
 from .llm import get_client
 
@@ -160,7 +161,7 @@ def headings_missing_citations(body: str, headings: list[str]) -> list[str]:
     return missing
 
 
-def thin_signals(body: str, headings: list[str]) -> list[str]:
+def thin_signals(body: str, headings: list[str], style: CitationStyle) -> list[str]:
     """Non-fatal report combining zero-citation headings with the
     author-year-mention heuristic (core/citations.py) — the same "names a
     study but the [n] is missing/too far away" check the chat flow uses,
@@ -170,12 +171,13 @@ def thin_signals(body: str, headings: list[str]) -> list[str]:
     heuristic has a known false-positive rate on long, correctly-cited
     sentences (verified against live chat output)."""
     signals = [f"heading '{h}' has no citations" for h in headings_missing_citations(body, headings)]
-    signals += [f"possible uncited mention: {m}" for m in find_uncited_author_year_mentions(body)]
+    signals += [f"possible uncited mention: {m}" for m in find_uncited_author_year_mentions(body, style)]
     return signals
 
 
 def generate_page(client, model: str, doc_id: str, title: str, metadata_yaml: str,
-                   headings: list[str], pool_text: str, valid_node_ids: set[str]) -> tuple[dict, list[str]]:
+                   headings: list[str], pool_text: str, valid_node_ids: set[str],
+                   style: CitationStyle) -> tuple[dict, list[str]]:
     system, user = build_prompt(headings, title, metadata_yaml, pool_text)
     last_error = None
     for attempt in range(RETRIES + 1):
@@ -200,7 +202,7 @@ def generate_page(client, model: str, doc_id: str, title: str, metadata_yaml: st
         if result is not None:
             error = validate(result, headings, valid_node_ids)
             if error is None:
-                thin = thin_signals(result["body_markdown"], headings)
+                thin = thin_signals(result["body_markdown"], headings, style)
                 return result, thin
             last_error = error
         else:
@@ -236,8 +238,8 @@ def slug_for(kind: str, value: str) -> str:
     return f"{kind}-{slugify(value)}"
 
 
-def links_footer(classification: dict, related: list[dict], paper: dict,
-                  all_papers_by_id: dict, doi: str | None) -> str:
+def links_footer(classification: dict, related: list[dict], ref: DocRef,
+                  all_papers_by_id: dict, style: CitationStyle) -> str:
     lines = ["## Links"]
     themes = classification.get("research_theme") or []
     if themes:
@@ -252,12 +254,7 @@ def links_footer(classification: dict, related: list[dict], paper: dict,
             f"[{r['doc_id']}]({r['doc_id']}.md) \"{all_papers_by_id.get(r['doc_id'], {}).get('title', '')}\""
             for r in related)
         lines.append(f"- Related papers: {rel_links}")
-    ext = []
-    bibcode = paper.get("bibcode")
-    if bibcode:
-        ext.append(f"[ADS](https://ui.adsabs.harvard.edu/abs/{bibcode})")
-    if doi:
-        ext.append(f"[DOI](https://doi.org/{doi})")
+    ext = [f"[{l.label}]({l.url})" for l in style.external_links(ref)]
     if ext:
         lines.append(f"- External: {' | '.join(ext)}")
     return "\n".join(lines)
@@ -299,10 +296,13 @@ def page_prompt_version(settings: Settings, doc_id: str) -> str | None:
 
 
 def write_page(settings: Settings, doc_id: str, paper: dict, classification: dict, page: dict,
-                related: list[dict], fulltext_source: str, all_papers_by_id: dict, model: str) -> None:
+                related: list[dict], fulltext_source: str, all_papers_by_id: dict, model: str,
+                style: CitationStyle) -> None:
     fm = front_matter(paper, classification, related, fulltext_source, model)
-    footer = links_footer(classification, related, paper, all_papers_by_id,
-                           paper.get("extra", {}).get("doi"))
+    ref = DocRef(doc_id=paper["doc_id"], native_id=paper.get("native_id"), title=paper.get("title", ""),
+                authors=paper.get("authors") or "", year=paper.get("year"),
+                journal=paper.get("journal") or "", extra=paper.get("extra") or {})
+    footer = links_footer(classification, related, ref, all_papers_by_id, style)
     content = f"---\n{fm}---\n\n# {paper['title']}\n\n{page['body_markdown']}\n\n{footer}\n"
     out_path = settings.wiki_dir / "papers" / f"{doc_id}.md"
     tmp = out_path.with_suffix(".md.tmp")
@@ -318,7 +318,7 @@ def write_page(settings: Settings, doc_id: str, paper: dict, classification: dic
 
 def process_paper(settings: Settings, client, doc_id: str, paper: dict, classification: dict,
                    all_classifications: dict, headings: list[str],
-                   papers_by_id: dict) -> tuple[str, str | None, list[str]]:
+                   papers_by_id: dict, style: CitationStyle) -> tuple[str, str | None, list[str]]:
     section_tree = json.loads((settings.sections_dir / f"{doc_id}.json").read_text(encoding="utf-8"))
     pool_text, valid_node_ids = build_node_pool(section_tree)
     metadata_yaml = yaml.safe_dump({
@@ -330,14 +330,14 @@ def process_paper(settings: Settings, client, doc_id: str, paper: dict, classifi
 
     try:
         page, thin_headings = generate_page(client, settings.bulk_model, doc_id, paper["title"],
-                                             metadata_yaml, headings, pool_text, valid_node_ids)
+                                             metadata_yaml, headings, pool_text, valid_node_ids, style)
     except Exception as e:
         return doc_id, str(e), []
 
     related = related_papers(doc_id, classification, all_classifications)
     fulltext_source = paper.get("fulltext_source", "publisher_pdf")
     write_page(settings, doc_id, paper, classification, page, related, fulltext_source,
-               papers_by_id, settings.bulk_model)
+               papers_by_id, settings.bulk_model, style)
     return doc_id, None, thin_headings
 
 
@@ -401,13 +401,14 @@ def run(settings: Settings, args) -> None:
         return
 
     client = get_client(settings)
+    style = load_citation_style(settings.corpus)
     failed = []
     thin_report = {}
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = {
             executor.submit(process_paper, settings, client, doc_id, papers_by_id[doc_id],
                              all_classifications[doc_id], all_classifications,
-                             headings, papers_by_id): doc_id
+                             headings, papers_by_id, style): doc_id
             for doc_id in todo
         }
         with tqdm(total=len(futures), unit="paper", desc="Generating pages") as pbar:

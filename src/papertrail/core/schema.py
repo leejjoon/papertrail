@@ -25,7 +25,9 @@ CREATE TABLE docs (
     title TEXT, year INTEGER, journal TEXT, authors_json TEXT,
     fulltext_source TEXT,
     has_fulltext INTEGER NOT NULL,
-    facets_json TEXT NOT NULL DEFAULT '{}'
+    facets_json TEXT NOT NULL DEFAULT '{}',
+    native_id TEXT,
+    extra_json TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE TABLE doc_facets (

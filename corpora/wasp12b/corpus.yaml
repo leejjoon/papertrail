@@ -7,6 +7,16 @@ source:
   metadata_adapter: ./adapter.py:load
   doc_id_field: safe_bibcode
 
+# How a doc_id becomes a display label, a traditional "Author Year" reference
+# entry, and external links (papertrail migration Step 9, Seam 1). wasp12b's
+# doc_ids are bibcodes with '&' filesystem-escaped to '+', which the built-in
+# author_year style doesn't know how to reverse for lookups -- see style.py.
+identity:
+  citation_style: ./style.py:Wasp12bStyle
+  external_links:
+    - {label: ADS, url: "https://ui.adsabs.harvard.edu/abs/{native_id}"}
+    - {label: DOI, url: "https://doi.org/{doi:raw}"}
+
 # Facets an LLM tags each paper with (kb/classify.py, Stage B). `values` is the
 # closed vocabulary shown to the model; `multi: true` allows more than one value.
 taxonomy:

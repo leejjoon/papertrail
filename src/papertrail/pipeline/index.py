@@ -69,10 +69,12 @@ def insert_full_doc(conn: sqlite3.Connection, settings: Settings, doc_id: str, p
     facets = _facets_for(cls)
     conn.execute(
         "INSERT INTO docs (doc_id, title, year, journal, authors_json, "
-        "fulltext_source, has_fulltext, facets_json) VALUES (?,?,?,?,?,?,?,?)",
+        "fulltext_source, has_fulltext, facets_json, native_id, extra_json) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?)",
         (doc_id, paper.get("title"), paper.get("year"), paper.get("journal"),
          json.dumps(paper.get("authors")), fulltext_source, 1,
-         json.dumps(facets, ensure_ascii=False)))
+         json.dumps(facets, ensure_ascii=False), paper.get("native_id"),
+         json.dumps(paper.get("extra") or {}, ensure_ascii=False)))
     _insert_doc_facets(conn, doc_id, facets)
 
     section_tree = json.loads((settings.sections_dir / f"{doc_id}.json").read_text(encoding="utf-8"))
@@ -99,9 +101,11 @@ def insert_stub_doc(conn: sqlite3.Connection, entry: dict) -> None:
     doc_id = entry["doc_id"]
     conn.execute(
         "INSERT INTO docs (doc_id, title, year, journal, authors_json, "
-        "fulltext_source, has_fulltext, facets_json) VALUES (?,?,?,?,?,?,?,?)",
+        "fulltext_source, has_fulltext, facets_json, native_id, extra_json) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?)",
         (doc_id, entry.get("title"), entry.get("year"), entry.get("journal"),
-         json.dumps(entry.get("authors")), None, 0, "{}"))
+         json.dumps(entry.get("authors")), None, 0, "{}", entry.get("native_id"),
+         json.dumps(entry.get("extra") or {}, ensure_ascii=False)))
     authors = entry.get("authors") or ""
     stub_text = f"{entry.get('title', '')}. {authors}. {entry.get('journal', '')} ({entry.get('year', '')})."
     conn.execute(

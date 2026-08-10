@@ -33,6 +33,7 @@ from tqdm import tqdm
 from ..config import Settings, load_settings
 from ..core.citations import find_uncited_author_year_mentions
 from ..core.nodes import iter_leaves
+from ..identity import load_citation_style
 from ..textutils import slugify
 from .llm import get_client
 
@@ -448,6 +449,7 @@ def run(settings: Settings, args) -> None:
         return
 
     client = get_client(settings)
+    style = load_citation_style(settings.corpus)
     failed = []
     thin_report = {}
     for kind, name, members in tqdm(todo, unit="topic", desc="Synthesizing topics"):
@@ -459,7 +461,7 @@ def run(settings: Settings, args) -> None:
             continue
         write_topic_page(settings, kind, name, result["prose"], members, settings.synth_model,
                           result["citations"])
-        mentions = find_uncited_author_year_mentions(result["prose"])
+        mentions = find_uncited_author_year_mentions(result["prose"], style)
         if mentions:  # non-fatal report only — see kb/paper_pages.py's thin_signals docstring
             thin_report[f"{kind}-{slugify(name)}"] = mentions
 

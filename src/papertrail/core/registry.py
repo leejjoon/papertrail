@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterator
 
 from ..config import Settings, load_settings
+from ..identity import CitationStyle, DocRef, load_citation_style
 from .nodes import _flatten_by_id, build_toc_outline
 from .renderer import render_doc_html
 
@@ -49,6 +50,8 @@ class Doc:
     authors: str = ""
     year: int | None = None
     journal: str = ""
+    native_id: str | None = None
+    extra: dict = field(repr=False, default_factory=dict)
     node_by_id: dict[str, dict] = field(repr=False, default_factory=dict)
     html: str = field(repr=False, default="")
     tree: dict = field(repr=False, default_factory=dict)
@@ -57,41 +60,22 @@ class Doc:
     def node_count(self) -> int:
         return len(self.node_by_id)
 
-
-def derive_label(doc_id: str, year: int | None) -> str:
-    """Short chip/reference label. doc_ids here are bibcodes (YYYYJJJJVVVPPPPA
-    format) or a slugified title for the 3 no-bibcode entries — a bibcode's
-    year is already the first 4 chars, so just tag on the record's own year
-    field for the no-bibcode case."""
-    if doc_id[:4].isdigit():
-        return doc_id[:4]
-    return str(year) if year else doc_id
+    def ref(self) -> DocRef:
+        """This doc's identity — a Doc IS-A superset of DocRef (it also
+        carries rendered HTML/node data DocRef doesn't need), so build one
+        on demand for CitationStyle calls rather than storing it twice."""
+        return DocRef(doc_id=self.doc_id, native_id=self.native_id, title=self.doc_name,
+                      authors=self.authors, year=self.year, journal=self.journal,
+                      extra=self.extra)
 
 
-def author_year_label(authors: str, year: int | None) -> str:
-    """'Lastname YYYY' / 'Lastname1 & Lastname2 YYYY' / 'Lastname1 et al.
-    YYYY' from the ADS-style 'Last, First; Last, First; ...' authors string —
-    the traditional-citation label used for a reference entry, as opposed to
-    derive_label's bare-year chip label. Matches the convention already used
-    in agent-published answers (e.g. answers/wasp12b_co_ratio_controversy.md)."""
-    names = [a.split(",")[0].strip() for a in (authors or "").split(";") if a.strip()]
-    y = str(year) if year else ""
-    if not names:
-        return y
-    if len(names) == 1:
-        return f"{names[0]} {y}".strip()
-    if len(names) == 2:
-        return f"{names[0]} & {names[1]} {y}".strip()
-    return f"{names[0]} et al. {y}".strip()
-
-
-def ads_url(doc_id: str) -> str | None:
-    """ADS abstract-page link for a bibcode doc_id, None for the 3 no-bibcode
-    (slugified-title) stub entries. doc_id is safe_bibcode()'d ('&' -> '+'
-    for filesystem safety); ADS itself expects '&' URL-encoded as '%26'."""
-    if doc_id[:4].isdigit():
-        return f"https://ui.adsabs.harvard.edu/abs/{doc_id.replace('+', '%26')}"
-    return None
+def _row_ref(row: sqlite3.Row) -> DocRef:
+    """Build a DocRef straight from a `docs` row — used where a full `Doc`
+    (with rendered HTML) isn't needed yet, e.g. the doc tree's leaf labels."""
+    authors = json.loads(row["authors_json"]) if row["authors_json"] else ""
+    extra = json.loads(row["extra_json"]) if row["extra_json"] else {}
+    return DocRef(doc_id=row["doc_id"], native_id=row["native_id"], title=row["title"] or "",
+                  authors=authors, year=row["year"], journal=row["journal"] or "", extra=extra)
 
 
 class CorpusRegistry:
@@ -104,6 +88,7 @@ class CorpusRegistry:
 
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or load_settings()
+        self.style: CitationStyle = load_citation_style(self.settings.corpus)
         self._doc_cache: dict[str, Doc] = {}
         self._doc_tree: dict | None = None
         self._meta_by_id: dict[str, sqlite3.Row] = {}
@@ -132,19 +117,21 @@ class CorpusRegistry:
 
     def _build_doc(self, doc_id: str) -> Doc:
         row = self._meta_by_id[doc_id]
-        authors = json.loads(row["authors_json"]) if row["authors_json"] else ""
+        ref = _row_ref(row)
         if not row["has_fulltext"]:
             return Doc(doc_id=doc_id, doc_name=row["title"] or doc_id,
-                       label=derive_label(doc_id, row["year"]), has_fulltext=False,
-                       authors=authors, year=row["year"], journal=row["journal"] or "")
+                       label=self.style.label(ref), has_fulltext=False,
+                       authors=ref.authors, year=row["year"], journal=row["journal"] or "",
+                       native_id=ref.native_id, extra=ref.extra)
         path = self.settings.sections_dir / f"{doc_id}.json"
         tree = json.loads(path.read_text(encoding="utf-8"))
         return Doc(
             doc_id=doc_id,
             doc_name=row["title"] or tree.get("doc_name") or doc_id,
-            label=derive_label(doc_id, row["year"]),
+            label=self.style.label(ref),
             has_fulltext=True,
-            authors=authors, year=row["year"], journal=row["journal"] or "",
+            authors=ref.authors, year=row["year"], journal=row["journal"] or "",
+            native_id=ref.native_id, extra=ref.extra,
             node_by_id=_flatten_by_id(tree["structure"]),
             html=render_doc_html(tree["structure"]),
             tree=tree,
@@ -174,7 +161,7 @@ class CorpusRegistry:
         stubs: list[dict] = []
         for doc_id, row in self._meta_by_id.items():
             leaf = {"doc_id": doc_id, "doc_name": row["title"] or doc_id,
-                    "label": derive_label(doc_id, row["year"]),
+                    "label": self.style.label(_row_ref(row)),
                     "year": row["year"], "has_fulltext": bool(row["has_fulltext"])}
             if not row["has_fulltext"]:
                 stubs.append(leaf)

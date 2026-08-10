@@ -265,7 +265,7 @@ def stream_chat(settings: Settings, registry: CorpusRegistry, store: Store,
     # citations anywhere near it, and validate_and_enrich's marker-only check
     # had no way to catch a *missing* marker, only a dangling one).
     if raw and raw.get("answer"):
-        mentions = find_uncited_author_year_mentions(raw["answer"])
+        mentions = find_uncited_author_year_mentions(raw["answer"], registry.style)
         if mentions:
             retried = call_model(user_content + RETRY_PROMPT_SUFFIX.format(mentions=mentions))
             if retried and retried.get("answer"):
@@ -297,7 +297,7 @@ def stream_chat(settings: Settings, registry: CorpusRegistry, store: Store,
 
     yield {"event": "step", "step": "validate", "status": "start"}
     try:
-        enriched = validate_and_enrich(payload, registry.docs, strict=False)
+        enriched = validate_and_enrich(payload, registry.docs, registry.style, strict=False)
     except ValueError:
         enriched = {"results": payload["results"], "documents": [], "warnings": ["validation failed"]}
     yield {"event": "step", "step": "validate", "status": "done"}

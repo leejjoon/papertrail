@@ -11,44 +11,47 @@ Two additions over the navigator's version, per docs/spec/01_data_contracts.md:
 - the enriched citation carries `block_type` and `page` (this corpus's nodes
   don't have a line_num; page is more meaningful for a scientific paper
   anyway) instead of the navigator's `line_num`.
+
+Identity/citation-style fields (papertrail migration Step 9, Seam 1): the
+enriched citation's "reference_label"/"external_links" (and the uncited-
+mention heuristic's pattern/window) now come from a CitationStyle passed in
+by the caller, rather than hardcoded ADS/author-year functions — the same
+logic, just parameterized. `reference_label`/`external_links` REPLACE the
+old `author_year`/`ads_url` keys; see webapp/static/index.html's `extLinks()`
+helper for the frontend's backward-compat shim over already-stored payloads
+that still carry the old keys.
 """
 from __future__ import annotations
 
 import re
 from typing import Any
 
-from .registry import Doc, ads_url, author_year_label
+from ..identity import CitationStyle
+from .registry import Doc
 
 _MARKER_RE = re.compile(r"\[(\d+)\]")
 
-# Heuristic for the most common uncited-claim failure mode: the model names a
-# specific study in traditional author-year prose style ("Madhusudhan et al.
-# (2011a,b)") instead of — or in addition to — attaching the required [n]
-# marker. This does NOT catch every uncited claim (a claim with no author
-# name at all slips through), but it's a strong, low-false-positive signal:
-# verified against the already-generated corpus, 24/50 author-year mentions
-# sampled across 40 paper pages had no [n] within 60 chars, meaning every
-# validate_and_enrich call up to now reported 0 warnings on these while the
-# citation contract was silently violated (checked only "do markers used
-# resolve", never "did every claim get a marker").
-_AUTHOR_YEAR_RE = re.compile(
-    r"[A-Z][a-zà-ÿ]+(?:\s+(?:et al\.?|&|and)\s*[A-Za-zà-ÿ]*)?"
-    r"\s*\((?:19|20)\d{2}[a-z]?(?:,\s*(?:19|20)?\d{2,4}[a-z]?)*\)"
-)
 
-
-def find_uncited_author_year_mentions(text: str, window: int = 200) -> list[str]:
+def find_uncited_author_year_mentions(text: str, style: CitationStyle, window: int | None = None) -> list[str]:
     """Author-year mentions with no [n] marker within `window` chars after
     them — each one is very likely an uncited or too-loosely-cited claim.
-    This is an approximate, tunable signal, not a hard rule: the model's
-    natural style is one citation at the end of a full descriptive sentence
-    (not immediately after the author name), and legitimate citations have
-    been observed 100-345 chars after their mention. 200 is a middle ground
-    between catching genuinely disconnected citations and not flagging every
-    long-but-correctly-cited compound sentence."""
+    This is an approximate, tunable signal, not a hard rule, and it's
+    entirely style-dependent: a style with no mention_pattern() (e.g.
+    PlainStyle) makes this a no-op, since the heuristic has never been
+    calibrated against that style's prose conventions. For AuthorYearStyle,
+    the model's natural prose puts one citation at the end of a full
+    descriptive sentence (not immediately after the author name), and
+    legitimate citations have been observed 100-345 chars after their
+    mention — 200 (AuthorYearStyle.mention_window()) is a middle ground
+    between catching genuinely disconnected citations and not flagging
+    every long-but-correctly-cited compound sentence."""
+    pattern = style.mention_pattern()
+    if pattern is None:
+        return []
+    win = style.mention_window() if window is None else window
     hits = []
-    for m in _AUTHOR_YEAR_RE.finditer(text or ""):
-        tail = text[m.end():m.end() + window]
+    for m in pattern.finditer(text or ""):
+        tail = text[m.end():m.end() + win]
         if not _MARKER_RE.search(tail):
             hits.append(m.group(0))
     return hits
@@ -81,7 +84,8 @@ def _section_title(node: dict) -> str:
     return node.get("_parent_title") or ""
 
 
-def validate_and_enrich(payload: Any, docs: dict[str, Doc], strict: bool = True) -> dict:
+def validate_and_enrich(payload: Any, docs: dict[str, Doc], style: CitationStyle,
+                        strict: bool = True) -> dict:
     data = normalize_payload(payload)
     results_in = data.get("results") or []
 
@@ -121,10 +125,13 @@ def validate_and_enrich(payload: Any, docs: dict[str, Doc], strict: bool = True)
                 "block_type": node.get("block_type"), "page": node.get("page"),
                 # Traditional-citation display fields — a bare "[n] 2011 §
                 # some heading" tells a reader nothing about which paper it
-                # is; author_year/journal/ads_url let the UI show something
-                # like "Madhusudhan et al. 2011, A high C/O ratio... (Nature)".
-                "author_year": author_year_label(doc.authors, doc.year),
-                "journal": doc.journal, "ads_url": ads_url(doc_id),
+                # is; reference_label/journal/external_links let the UI show
+                # something like "Madhusudhan et al. 2011, A high C/O
+                # ratio... (Nature)" with an ADS/DOI link where available.
+                "reference_label": style.reference_label(doc.ref()),
+                "journal": doc.journal,
+                "external_links": [{"label": l.label, "url": l.url}
+                                   for l in style.external_links(doc.ref())],
             })
 
         markers = _markers_in(answer)
@@ -134,7 +141,7 @@ def validate_and_enrich(payload: Any, docs: dict[str, Doc], strict: bool = True)
             warnings.append(f"result {idx}: marker(s) {sorted(missing_citation)} have no citation")
         if unused_citation:
             warnings.append(f"result {idx}: citation id(s) {sorted(unused_citation)} not cited in answer")
-        uncited_mentions = find_uncited_author_year_mentions(answer)
+        uncited_mentions = find_uncited_author_year_mentions(answer, style)
         if uncited_mentions:
             warnings.append(f"result {idx}: possible uncited claim(s) near: {uncited_mentions}")
 

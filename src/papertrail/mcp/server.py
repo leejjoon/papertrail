@@ -54,17 +54,20 @@ from ..core.citations import InvalidCitationsError, validate_and_enrich
 from ..core.nodes import context_window
 from ..core.registry import CorpusRegistry
 from ..core.search import format_hits, paper_filters_sql, run_search
+from ..identity import CitationStyle, load_citation_style
 
 NO_INDEX_MSG = "Search index not found — run `papertrail index` first."
 
 
-def canonical_doc_id(db: sqlite3.Connection, doc_id: str) -> str | None:
-    row = db.execute("SELECT doc_id FROM docs WHERE doc_id = ?", (doc_id,)).fetchone()
-    if row:
-        return row["doc_id"]
-    safe = doc_id.replace("&", "+")
-    row = db.execute("SELECT doc_id FROM docs WHERE doc_id = ?", (safe,)).fetchone()
-    return row["doc_id"] if row else None
+def canonical_doc_id(db: sqlite3.Connection, doc_id: str, style: CitationStyle) -> str | None:
+    """Try doc_id as given, then each of style.canonicalize()'s alternate
+    encodings (e.g. wasp12b's '&' -> '+' bibcode escaping) — replaces the
+    hardcoded doc_id.replace('&', '+') this used to do unconditionally."""
+    for candidate in style.canonicalize(doc_id):
+        row = db.execute("SELECT doc_id FROM docs WHERE doc_id = ?", (candidate,)).fetchone()
+        if row:
+            return row["doc_id"]
+    return None
 
 
 def _find_node(nodes: list[dict], node_id: str, parent_title: str | None = None):
@@ -81,6 +84,7 @@ def _find_node(nodes: list[dict], node_id: str, parent_title: str | None = None)
 
 def build_server(settings: Settings) -> MCPServer:
     mcp = MCPServer(f"{settings.corpus.name}-kb")
+    style = load_citation_style(settings.corpus)
     _registry: dict[str, CorpusRegistry] = {}  # lazy box: only built on first authoring-tool call
 
     def get_registry() -> CorpusRegistry:
@@ -128,7 +132,7 @@ def build_server(settings: Settings) -> MCPServer:
         if db is None:
             return NO_INDEX_MSG
         try:
-            dc = canonical_doc_id(db, doc_id)
+            dc = canonical_doc_id(db, doc_id, style)
             if dc is None:
                 return f"Unknown doc_id: {doc_id}"
             row = db.execute("SELECT * FROM docs WHERE doc_id = ?", (dc,)).fetchone()
@@ -137,6 +141,7 @@ def build_server(settings: Settings) -> MCPServer:
         meta = {k: row[k] for k in row.keys()}
         meta["authors"] = json.loads(meta.pop("authors_json")) if meta["authors_json"] else None
         meta.update(json.loads(meta.pop("facets_json") or "{}"))
+        meta["extra"] = json.loads(meta.pop("extra_json") or "{}")
         meta["has_fulltext"] = bool(meta["has_fulltext"])
         out = "```yaml\n" + yaml.safe_dump(meta, sort_keys=False, allow_unicode=True) + "```\n"
         if not row["has_fulltext"]:
@@ -313,7 +318,7 @@ def build_server(settings: Settings) -> MCPServer:
         responsibility."""
         registry = get_registry()
         try:
-            return validate_and_enrich(payload, registry.docs, strict=True)
+            return validate_and_enrich(payload, registry.docs, registry.style, strict=True)
         except InvalidCitationsError as exc:
             return {"error": "invalid citations", "offending": exc.offending}
         except ValueError as exc:
@@ -328,7 +333,7 @@ def build_server(settings: Settings) -> MCPServer:
         payload."""
         registry = get_registry()
         try:
-            enriched = validate_and_enrich(payload, registry.docs, strict=True)
+            enriched = validate_and_enrich(payload, registry.docs, registry.style, strict=True)
         except InvalidCitationsError as exc:
             return {"error": "invalid citations", "offending": exc.offending}
         except ValueError as exc:
