@@ -1,8 +1,11 @@
 {
   "mcpServers": {
     "wasp12b-kb": {
-      "command": ".venv/bin/python",
-      "args": ["kb/mcp_server.py"]
+      "command": ".venv/bin/papertrail",
+      "args": ["mcp"],
+      "env": {
+        "PAPERTRAIL_CORPUS": "kb"
+      }
     }
   }
 }
