@@ -23,6 +23,7 @@ Two behavior fixes over the code this replaces:
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import os
 import sys
 from dataclasses import dataclass, field
@@ -58,23 +59,36 @@ class Corpus:
         return p if p.is_absolute() else (self.root / p).resolve()
 
     def adapter_module(self):
-        """Dynamically import corpus.yaml's metadata_adapter module
-        ("module.path:func") and return the module object — kb/build_index.py
-        (Stage E) needs the module itself (for load_all_including_stubs(), an
-        undeclared second entry point corpus.yaml doesn't mention — the
-        papertrail migration's Step 9 turns this into a proper declared
-        entry point), while load_papers() below only needs the one function.
+        """Import corpus.yaml's metadata_adapter module and return the
+        module object — kb/build_index.py (Stage E) needs the module itself
+        (for load_all_including_stubs(), an undeclared second entry point
+        corpus.yaml doesn't mention — the papertrail migration's Step 9
+        turns this into a proper declared entry point), while load_papers()
+        below only needs the one function.
 
-        Mirrors kb/config.py's load_papers(), including its sys.path
-        assumption: metadata_adapter's dotted path is resolved from the
-        corpus root's PARENT directory (true for wasp12b's current
-        `kb.adapters.wasp12b:load` value, which assumes the repo root — kb/'s
-        parent — is on sys.path, exactly as kb/config.py itself arranged).
-        Once a corpus is fully self-contained (Step 8: corpus.yaml +
-        adapter.py + data/ under one directory), metadata_adapter can
-        instead be a corpus-relative "./adapter.py:func" path — not needed
-        until then."""
+        Two forms of `source.metadata_adapter`, distinguished by whether the
+        module part looks like a path:
+        - "./adapter.py:func" or "../somewhere/adapter.py:func" (corpus-
+          relative file path) — loaded via importlib.util.spec_from_file_location,
+          no sys.path mutation, no import-name collision possible. This is
+          what a self-contained corpus directory uses (papertrail migration
+          Step 8: corpus.yaml + adapter.py + data/ + wiki/ all under one root).
+        - "kb.adapters.wasp12b:load" (dotted module path) — resolved via
+          importlib.import_module after inserting the corpus root's PARENT
+          directory onto sys.path, mirroring kb/config.py's original
+          load_papers() exactly. This is wasp12b's interim value between
+          migration Steps 6 and 8, when its adapter still lives inside the
+          old kb/ layout rather than its own corpus directory."""
         mod_path, _ = self.raw["source"]["metadata_adapter"].split(":")
+        if mod_path.startswith(".") or mod_path.startswith("/"):
+            file_path = Path(mod_path)
+            if not file_path.is_absolute():
+                file_path = (self.root / file_path).resolve()
+            spec = importlib.util.spec_from_file_location(f"_corpus_adapter_{self.name}", file_path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+
         parent = str(self.root.parent)
         if parent not in sys.path:
             sys.path.insert(0, parent)

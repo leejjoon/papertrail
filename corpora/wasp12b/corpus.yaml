@@ -1,0 +1,49 @@
+corpus:
+  name: wasp12b
+  description: Papers mentioning WASP-12 b
+
+source:
+  marker_dir: ../../paper_download/data/marker
+  metadata_adapter: ./adapter.py:load
+  doc_id_field: safe_bibcode
+
+# Facets an LLM tags each paper with (kb/classify.py, Stage B). `values` is the
+# closed vocabulary shown to the model; `multi: true` allows more than one value.
+taxonomy:
+  research_theme:
+    multi: true
+    values:
+      - orbital-decay
+      - atmosphere-composition
+      - atmosphere-escape-mass-loss
+      - tidal-interaction
+      - transit-timing
+      - transit-spectroscopy
+      - radial-velocity
+      - magnetic-field
+      - formation-evolution
+      - survey-catalog-mention
+  method:
+    multi: true
+    values: [photometry, spectroscopy, radial-velocity, theory-modeling, radio]
+  facility:
+    multi: true
+    values: [HST, Spitzer, JWST, TESS, Kepler, ground-based, theoretical-only]
+  role_of_wasp12b:
+    multi: false
+    values: [primary-target, incidental-mention]
+
+# Required H2 headings for a paper wiki page (kb/paper_pages.py, Stage C). Each
+# heading's prose must carry [n] citations resolving to that paper's own nodes.
+wiki_headings:
+  - Overview
+  - Observations & Data
+  - Method
+  - Results
+  - WASP-12b-Specific Findings
+  - Limitations & Open Questions
+
+models:
+  bulk_env: BULK_MODEL
+  synth_env: SYNTH_MODEL
+  chat_env: CHAT_MODEL
