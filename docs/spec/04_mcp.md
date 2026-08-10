@@ -2,8 +2,23 @@
 
 `kb/mcp_server.py` — 9 tools over the same `kb.sqlite`/`kb/wiki/` artifacts the web app
 serves, so an agent and a human chatting see identical content and an agent-published
-answer renders with the identical citation UX. Built on `mcp.server.fastmcp.FastMCP`,
-following `kasi_papers_analysis/kb/mcp_server.py`'s shape and helpers directly.
+answer renders with the identical citation UX. Following
+`kasi_papers_analysis/kb/mcp_server.py`'s shape and helpers directly.
+
+**Corrections:** the "Built on `mcp.server.fastmcp.FastMCP`" claim above was never true
+of the actual `kb/mcp_server.py` — it uses `mcp.server.mcpserver.MCPServer` (the
+installed SDK is `mcp==2.0.0`; `FastMCP`'s decorator-based API is the 1.x shape). Kept
+here uncorrected in the transport section below only insofar as it still shows the real
+`MCPServer` usage; the prose above is the stale bit. Separately, as of the `papertrail`
+extraction (`CLAUDE.md`, `05_adoption.md`), `kb/mcp_server.py` no longer exists — it was
+replaced by `src/papertrail/mcp/server.py`'s `build_server(settings)`, which defines all
+9 tools as closures over an explicit `settings` object (no module-global config, no
+`sys.path` injection) and additionally builds `search_fulltext`/`list_papers`'s facet
+parameters (`research_theme`/`method`/`facility`/`role_of_wasp12b` below) **dynamically
+from `corpus.yaml`'s taxonomy** at server-start time via a runtime `inspect.Signature`,
+rather than the hardcoded parameter list this document shows — see `05_adoption.md`
+step 3. The 9 tool names, their behavior, and (for wasp12b specifically) their effective
+parameters are otherwise unchanged; not yet the live process.
 
 ## Shared helpers (reused from kasi almost verbatim)
 
@@ -133,6 +148,16 @@ Local/venv usage (`.mcp.json`):
 ```json
 {"mcpServers": {"wasp12b-kb": {"command": ".venv/bin/python", "args": ["kb/mcp_server.py"]}}}
 ```
+
+`papertrail`'s equivalent, what `.mcp.json` actually contains as of this writing (see
+`05_adoption.md` step 9 — the process this launches is `src/papertrail/mcp/server.py`,
+not `kb/mcp_server.py`, which no longer exists):
+```json
+{"mcpServers": {"wasp12b-kb": {"command": ".venv/bin/papertrail", "args": ["mcp"],
+                               "env": {"PAPERTRAIL_CORPUS": "kb"}}}}
+```
+(`PAPERTRAIL_CORPUS` here still points at `kb/`, the live corpus directory, pending
+cutover to `corpora/wasp12b/` — see `CLAUDE.md`'s mid-migration section.)
 
 Optional Docker (P4, if ever needed for remote access): kasi's exact ro-mount pattern —
 image contains only `config.py` + `mcp_server.py` + a minimal `requirements-mcp.txt`

@@ -2,12 +2,26 @@
 
 ## Status
 
-This is a **specification**, not yet an implementation. It defines the system to build
-on top of the 190 papers already downloaded and Marker-converted
-(`paper_download/data/marker/*.json`, see `paper_download/PAPER_DOWNLOAD_HOWTO.md` and
-`paper_download/data/FAILED_PDFS.md` for how that corpus was assembled). Nothing under
-`kb/` or `webapp/` exists yet — this document set is the plan those directories will
-implement.
+**Stale header, corrected:** the paragraph below ("this is a specification, not yet an
+implementation... nothing under `kb/` or `webapp/` exists yet") was accurate when this
+doc was first written and was never updated once P1–P4 actually shipped — kept below
+verbatim as a historical note, not current fact. The real current status, as of the
+`papertrail` extraction (see `CLAUDE.md`'s "⚠️ Mid-migration" section and
+`05_adoption.md`): `kb/` + `webapp/` are the **live**, working implementation of
+everything this document set describes, and have been for most of this project's life.
+In parallel, that same functionality has been extracted into a reusable, corpus-agnostic
+package, `src/papertrail/` (WASP-12b becoming its first consumer corpus,
+`corpora/wasp12b/`) — verified equivalent to `kb/`/`webapp/` but not yet the live system.
+`CLAUDE.md` is the up-to-date map of what's live vs. in-migration; this spec set
+describes the *design*, most of which the migration preserved rather than changed (see
+`05_adoption.md` for exactly what genericity work the migration added on top of it).
+
+*(Original text, historical:)* This is a **specification**, not yet an implementation. It
+defines the system to build on top of the 190 papers already downloaded and
+Marker-converted (`paper_download/data/marker/*.json`, see
+`paper_download/PAPER_DOWNLOAD_HOWTO.md` and `paper_download/data/FAILED_PDFS.md` for how
+that corpus was assembled). Nothing under `kb/` or `webapp/` exists yet — this document
+set is the plan those directories will implement.
 
 ## Vision
 
@@ -158,6 +172,10 @@ a *different* Marker corpus in `05_adoption.md`.
 
 ## Repo layout
 
+**This shows the original `kb/`/`webapp/` layout only** — still the live layout today.
+For the parallel, generalized `src/papertrail/` + `corpora/wasp12b/` layout the
+migration produced (not yet live), see `CLAUDE.md`.
+
 ```
 kb/
   config.py              # env vars, paths — mirrors paper_download/config.py
@@ -187,6 +205,10 @@ paper_download/          # unchanged — acquisition only, out of scope here
 ```
 
 ## Phased roadmap
+
+**P1–P4 below are all complete** (this is the live `kb/`/`webapp/` system described
+throughout this doc set). An unlisted **P5**, the `papertrail` extraction, is in progress
+on top of it — see `CLAUDE.md` and `05_adoption.md`.
 
 1. **P1 — Pipeline + index.** Stage A through Stage E over the existing 190 Marker
    JSONs (no reconversion needed — see `02_pipeline.md` Stage A). Produces `kb.sqlite`,

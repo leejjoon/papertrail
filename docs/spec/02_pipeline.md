@@ -1,5 +1,16 @@
 # Pipeline
 
+**Migration note:** everything below describes the live `kb/*.py` stages and
+`kb/config.py`, still accurate for the running system today. The `papertrail` extraction
+(`CLAUDE.md`, `05_adoption.md`) moved these five stages to `src/papertrail/pipeline/
+{sections,classify,paper_pages,topic_pages,index}.py`, replaced the module-global
+`kb/config.py` shown below with an explicit `Settings`/`load_settings()` (no import-time
+`mkdir`, no hardcoded `Path(__file__)`-relative paths — see `05_adoption.md`), and made
+each stage's prompts/taxonomy/headings read entirely from `corpus.yaml` instead of the
+hardcoded WASP-12b literals this document's Stage B/C/D sections describe. The CLI shape
+changes from `.venv/bin/python kb/<stage>.py` to `papertrail <stage> --corpus
+corpora/wasp12b`; not yet cut over as the live command.
+
 Five stages, `kb/build_sections.py` → `kb/build_index.py`, run in order. All resumable
 and idempotent (skip work whose output is newer than its input and whose generator
 provenance matches, matching `paper_download/01_fetch_pdfs.py` /
@@ -23,6 +34,15 @@ block's `images` field *regardless* of the `disable_image_extraction` flag (conf
 .venv/bin/python kb/paper_pages.py        # Stage C
 .venv/bin/python kb/topic_pages.py        # Stage D
 .venv/bin/python kb/build_index.py        # Stage E
+```
+
+The `papertrail`-equivalent commands (not yet live, see the migration note above):
+```bash
+.venv/bin/papertrail sections     --corpus corpora/wasp12b   # Stage A
+.venv/bin/papertrail classify     --corpus corpora/wasp12b   # Stage B
+.venv/bin/papertrail paper-pages  --corpus corpora/wasp12b   # Stage C
+.venv/bin/papertrail topic-pages  --corpus corpora/wasp12b   # Stage D
+.venv/bin/papertrail index        --corpus corpora/wasp12b   # Stage E
 ```
 
 `kb/config.py` is the shared seam every stage imports, mirroring

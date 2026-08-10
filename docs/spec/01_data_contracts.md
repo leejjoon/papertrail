@@ -3,6 +3,16 @@
 Every schema in the system, in the order data flows through the pipeline. `02_pipeline.md`
 describes how each artifact is produced; this document is the reference for its shape.
 
+**Migration note:** the schemas below (`corpus.yaml` shape, `kb.sqlite` DDL, citation
+field names) describe the **live** `kb/`/`webapp/` system and are still accurate for it
+today. The `papertrail` extraction (see `CLAUDE.md`, `05_adoption.md`) generalized every
+one of these — a generic `doc_facets` table instead of one column per facet,
+`corpus.yaml` gaining `identity`/`taxonomy`-per-facet-config/`navigation`/`corpus.title`
+etc. blocks, and citation payloads emitting `reference_label`/`external_links` instead of
+the `author_year`/`ads_url` fields shown below — verified equivalent for wasp12b but not
+yet cut over. Where it matters, a callout below points at the generalized shape; treat
+this document as the contract for what's actually running until that cutover happens.
+
 ## `kb/corpus.yaml` — the generalization seam
 
 One file that parameterizes everything corpus-specific. `05_adoption.md` is essentially
@@ -72,6 +82,12 @@ This corpus's adapter (`kb/adapters/wasp12b.py`) wraps the existing
 `paper_download/data/ads_meta.json` for DOIs) — no new metadata-loading code, just a
 thin re-export with `doc_id = safe_bibcode`. See `05_adoption.md` for what a from-scratch
 adapter looks like for a corpus with no existing loader.
+
+*(Migration note: `papertrail`'s version of this same adapter,
+`corpora/wasp12b/adapter.py`, additionally supplies `native_id`/`has_fulltext`/
+`fulltext_source` per record — see `05_adoption.md`'s checklist step 2 — and is loaded via
+`importlib.util.spec_from_file_location` rather than a bare `module:function` dotted
+path, so a corpus directory is self-contained without a `sys.path` hack.)*
 
 ---
 
@@ -359,8 +375,12 @@ re-runs.
 
 ## `kb.sqlite` schema
 
-Full drop-and-rebuild every run (kasi's explicit "no resume logic to maintain" choice,
-still valid at this scale).
+**This is the live schema** — full drop-and-rebuild every run (kasi's explicit "no
+resume logic to maintain" choice, still valid at this scale). `papertrail`'s generalized
+schema (`src/papertrail/core/schema.py`, not yet cut over — see the migration note at
+the top of this document) replaces `research_theme_json`/`method_json`/`facility_json`/
+`role_of_wasp12b` with a generic `doc_facets(doc_id, facet, value)` table plus a
+`docs.facets_json` display blob, and adds `docs.native_id`/`docs.extra_json`.
 
 ```sql
 CREATE TABLE docs (
@@ -447,6 +467,12 @@ unchanged.
   ]
 }
 ```
+
+*(Migration note: `papertrail`'s `validate_and_enrich` — now `src/papertrail/core/
+citations.py`, not yet cut over — emits `reference_label` + `external_links[]` per
+citation instead of this schema's `author_year`/`ads_url`, via a pluggable
+`CitationStyle`; see `05_adoption.md` step 6. The webapp's stored-payload compat shim
+reads either shape.)*
 
 Validation rule set (extends the navigator's `validate_and_enrich`):
 1. Structural — matches the JSON Schema (`anyOf[canonical, bare result]`,

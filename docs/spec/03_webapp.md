@@ -5,6 +5,15 @@ an answer store. Copied into this repo's `webapp/`, not built into
 `multi_doc_navigator` itself (that project's PRD explicitly scopes chat/search out —
 see `00_overview.md`).
 
+**Migration note:** this describes the live `webapp/` app, still accurate today. The
+`papertrail` extraction (`CLAUDE.md`, `05_adoption.md`) moved `registry.py`/`renderer.py`/
+`store.py`/`search.py` to `src/papertrail/core/`, `answer.py` to
+`src/papertrail/core/citations.py` (same `validate_and_enrich` contract, generalized —
+see `01_data_contracts.md`'s migration note on the `reference_label`/`external_links`
+field rename), and `main.py`'s module-level `CorpusRegistry()` into an explicit
+`create_app(settings)` factory in `src/papertrail/web/app.py` (`webapp/app/main.py` is
+now a 2-line shim: `from papertrail.web.asgi import app`). Not yet the live process.
+
 ## Reused seam
 
 `multi_doc_navigator/app/registry.py`, `renderer.py`, `answer.py` carry zero FastAPI
@@ -133,7 +142,9 @@ Flow:
 
 ```bash
 uv venv webapp/.venv --python 3.12
-uv pip install -p webapp/.venv/bin/python -r webapp/requirements.txt
+uv pip install -p webapp/.venv/bin/python -r webapp/requirements.txt   # historical: this
+    # file was deleted in the papertrail migration's Step 11 — use `uv pip install -e
+    # .[web]` against pyproject.toml instead, the real dependency list now
 BASE_URL=... API_KEY=... CHAT_MODEL=anthropic/claude-sonnet-5 \
   webapp/.venv/bin/python -m uvicorn webapp.app.main:app --reload
 ```
@@ -143,6 +154,11 @@ Env: `BASE_URL`, `API_KEY`, `CHAT_MODEL` (read at chat-call time, same
 different corpus per `05_adoption.md`. No auth, no CORS hardening, bind `127.0.0.1` only
 (kasi's docker-compose comment: "the server has no auth… do NOT bind 0.0.0.0 here" —
 same warning applies here even without Docker).
+
+*(Migration note: `papertrail`'s equivalent is `--corpus PATH` or `PAPERTRAIL_CORPUS`,
+serving via `.venv/bin/papertrail serve --corpus corpora/wasp12b` /
+`uvicorn papertrail.web.asgi:app`, with `KB_DIR`/`KB_SQLITE` still honored for one
+release as a compatibility alias — see `05_adoption.md` step 9. Not yet the live command.)*
 
 Static export (P4, `00_overview.md` roadmap): `build_static.py` ported from the
 navigator, extended to also bake a chosen conversation's full message history

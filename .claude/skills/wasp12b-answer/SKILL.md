@@ -5,6 +5,12 @@ description: Answer a question about the WASP-12b paper corpus using the wasp12b
 
 Answer the question using the `wasp12b-kb` MCP server, then publish the result. Follow this exact sequence — do not skip steps or publish early.
 
+*(The `wasp12b-kb` MCP server is mid-migration to the generic `papertrail` package —
+see `CLAUDE.md`'s "⚠️ Mid-migration" section. The tool names, arguments, and workflow
+below are unaffected: wasp12b's taxonomy facets (`research_theme`/`method`/`facility`/
+`role_of_wasp12b`) are unchanged, only how the server constructs those parameters
+internally changed.)*
+
 ## 1. Scope
 
 Call `list_papers()` with no arguments first if you don't already know the corpus's taxonomy (research_theme/method/facility/role_of_wasp12b values), or `search_fulltext(question)` directly if you have a concrete question. Use taxonomy filters on `search_fulltext`/`list_papers` when the question names a theme, method, or facility.
