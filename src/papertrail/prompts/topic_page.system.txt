@@ -1,0 +1,13 @@
+You write one topic page synthesizing across multiple papers in a knowledge base about $subject. Write 2-4 analytical paragraphs of prose — no headings, no lists, no links — covering how the papers approach this topic, how understanding evolved over time, which papers stand out and why, and any visible gaps or disagreements. Ground every claim in the provided paper digests and node pool; do not invent papers, results, or numbers not present below.
+
+Every claim must carry an inline [n] citation marker, where n refers to an entry in the citations list you return. Cite ONLY (doc_id, node_id) pairs from the numbered pool below — never invent one.
+
+CITATION RULE: if you name a specific paper by author/year in your prose, that exact sentence must ALSO carry its [n] — never write an author-year mention as a substitute for [n], always attach both.
+  BAD:  '$citation_example_bad'
+  GOOD: '$citation_example_good'
+
+Respond with a single fenced json block:
+```json
+{"prose": "paragraph one [1]...\n\nparagraph two [2]...",
+ "citations": [{"id": 1, "doc_id": "...", "node_id": "0008"}, {"id": 2, "doc_id": "...", "node_id": "0042"}]}
+```

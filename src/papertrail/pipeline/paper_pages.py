@@ -27,15 +27,15 @@ from datetime import datetime, timezone
 import yaml
 from tqdm import tqdm
 
+from .. import prompts
 from ..config import Settings, load_settings
 from ..core.citations import find_uncited_author_year_mentions
 from ..core.nodes import iter_leaves
 from ..identity import CitationStyle, DocRef, load_citation_style
-from ..taxonomy import FacetSpec, topic_page_facets
+from ..taxonomy import FacetSpec, heading_entries, topic_page_facets
 from ..textutils import slugify
 from .llm import get_client
 
-PROMPT_VERSION = "1"
 RETRIES = 3   # 4 total attempts — citation-heavy papers (100+ citations) need more
               # headroom than kb/classify.py's coarse tags did; see max_tokens below
 MAX_REFERENCE_NODES_SHOWN = 40   # cap bibliography entries in the citation pool —
@@ -71,40 +71,44 @@ def build_node_pool(section_tree: dict) -> tuple[str, set[str]]:
 # LLM call — one page, all required headings, in one shot
 # ---------------------------------------------------------------------------
 
-def build_prompt(headings: list[str], title: str, metadata_yaml: str, pool_text: str) -> tuple[str, str]:
-    heading_list = "\n".join(f"- {h}" for h in headings)
-    system = (
-        "You write one wiki page for a paper in a knowledge base about the "
-        "exoplanet WASP-12b. Write exactly these H2 sections, in this order, "
-        "each starting with '## <heading>':\n" + heading_list + "\n\n"
-        "Every claim must carry an inline [n] citation marker, where n refers to "
-        "an entry in the citations list you return. Cite ONLY node_ids from the "
-        "numbered pool below — never invent one, never cite a node not shown.\n\n"
-        "CITATION RULE: if you name a specific source by author/year in your "
-        "prose, that exact sentence must ALSO carry its [n] — never write an "
-        "author-year mention as a substitute for [n], always attach both.\n"
-        "  BAD:  'Madhusudhan et al. (2011) reported a carbon-rich atmosphere, "
-        "in contrast to the host star.'\n"
-        "  GOOD: 'Madhusudhan et al. (2011) reported a carbon-rich atmosphere "
-        "[2], in contrast to the host star [2].'\n\n"
-        "If a section genuinely doesn't apply to this paper (e.g. "
-        "'WASP-12b-Specific Findings' for a paper that only mentions it in a "
-        "table), write one honest sentence saying so, citing the node that shows "
-        "the mention if one exists.\n\n"
-        "Respond with a single fenced json block:\n"
-        "```json\n"
-        '{"body_markdown": "## Overview\\n...\\n\\n## Observations & Data\\n...",\n'
-        ' "citations": [{"id": 1, "node_id": "0008"}, {"id": 2, "node_id": "0042"}]}\n'
-        "```\n"
-        "citations ids are numbered sequentially across the whole page, in the "
-        "order they first appear in body_markdown, matching the [n] markers used."
+def build_system_prompt(settings: Settings, headings_raw: list) -> str:
+    """The inapplicable-section example used to name one specific heading,
+    "WASP-12b-Specific Findings", literally in the prompt text; now it's
+    derived from whichever heading(s) corpus.yaml marks `may_not_apply:
+    true` (papertrail migration Step 9, Seam 2) — for wasp12b, exactly one,
+    reproducing the original sentence exactly."""
+    entries = heading_entries(headings_raw)
+    heading_list = "\n".join(f"- {e['name']}" for e in entries)
+
+    inapplicable = [e["name"] for e in entries if e["may_not_apply"]]
+    if inapplicable:
+        examples = ", ".join(f"'{n}'" for n in inapplicable)
+        inapplicable_clause = (
+            f"If a section genuinely doesn't apply to this paper (e.g. "
+            f"{examples} for a paper that only mentions it in a table), write "
+            f"one honest sentence saying so, citing the node that shows the "
+            f"mention if one exists.")
+    else:
+        inapplicable_clause = (
+            "If a section genuinely doesn't apply to this paper, write one "
+            "honest sentence saying so, citing the node that shows why if one exists.")
+
+    names = [e["name"] for e in entries]
+    ex1 = names[0] if names else "Section One"
+    ex2 = names[1] if len(names) > 1 else "Section Two"
+    json_body_example = (
+        f'{{"body_markdown": "## {ex1}\\n...\\n\\n## {ex2}\\n...",\n'
+        f' "citations": [{{"id": 1, "node_id": "0008"}}, {{"id": 2, "node_id": "0042"}}]}}'
     )
-    user = (
-        f"# Metadata\n{metadata_yaml}\n"
-        f"# Title\n{title}\n\n"
-        f"# Citable node pool (cite ONLY these node_ids)\n{pool_text}"
-    )
-    return system, user
+
+    return prompts.render(settings.corpus, "paper_page.system", heading_list=heading_list,
+                          inapplicable_clause=inapplicable_clause, json_body_example=json_body_example)
+
+
+def build_user_prompt(title: str, metadata_yaml: str, pool_text: str) -> str:
+    return (f"# Metadata\n{metadata_yaml}\n"
+            f"# Title\n{title}\n\n"
+            f"# Citable node pool (cite ONLY these node_ids)\n{pool_text}")
 
 
 def parse_response(text: str) -> dict | None:
@@ -176,10 +180,10 @@ def thin_signals(body: str, headings: list[str], style: CitationStyle) -> list[s
     return signals
 
 
-def generate_page(client, model: str, doc_id: str, title: str, metadata_yaml: str,
-                   headings: list[str], pool_text: str, valid_node_ids: set[str],
+def generate_page(client, model: str, doc_id: str, system: str, title: str, metadata_yaml: str,
+                   heading_names: list[str], pool_text: str, valid_node_ids: set[str],
                    style: CitationStyle) -> tuple[dict, list[str]]:
-    system, user = build_prompt(headings, title, metadata_yaml, pool_text)
+    user = build_user_prompt(title, metadata_yaml, pool_text)
     last_error = None
     for attempt in range(RETRIES + 1):
         max_tokens = 8000 * (2 ** attempt)  # 8000, 16000, 32000, 64000 — same
@@ -201,9 +205,9 @@ def generate_page(client, model: str, doc_id: str, title: str, metadata_yaml: st
         text = resp.choices[0].message.content or ""
         result = parse_response(text)
         if result is not None:
-            error = validate(result, headings, valid_node_ids)
+            error = validate(result, heading_names, valid_node_ids)
             if error is None:
-                thin = thin_signals(result["body_markdown"], headings, style)
+                thin = thin_signals(result["body_markdown"], heading_names, style)
                 return result, thin
             last_error = error
         else:
@@ -270,7 +274,8 @@ def links_footer(classification: dict, related: list[dict], ref: DocRef, all_pap
 
 
 def front_matter(paper: dict, classification: dict, related: list[dict],
-                  fulltext_source: str, model: str, taxonomy: dict[str, FacetSpec]) -> str:
+                  fulltext_source: str, model: str, taxonomy: dict[str, FacetSpec],
+                  prompt_version: str) -> str:
     fm = {
         "doc_id": paper["doc_id"],
         "title": paper["title"],
@@ -283,7 +288,7 @@ def front_matter(paper: dict, classification: dict, related: list[dict],
         fm[facet] = classification.get(facet) or ([] if spec.multi else None)
     fm["related_papers"] = related
     fm["generator"] = {
-        "model": model, "prompt_version": PROMPT_VERSION,
+        "model": model, "prompt_version": prompt_version,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
     return yaml.safe_dump(fm, sort_keys=False, allow_unicode=True)
@@ -304,8 +309,8 @@ def page_prompt_version(settings: Settings, doc_id: str) -> str | None:
 
 def write_page(settings: Settings, doc_id: str, paper: dict, classification: dict, page: dict,
                 related: list[dict], fulltext_source: str, all_papers_by_id: dict, model: str,
-                style: CitationStyle, taxonomy: dict[str, FacetSpec]) -> None:
-    fm = front_matter(paper, classification, related, fulltext_source, model, taxonomy)
+                style: CitationStyle, taxonomy: dict[str, FacetSpec], prompt_version: str) -> None:
+    fm = front_matter(paper, classification, related, fulltext_source, model, taxonomy, prompt_version)
     ref = DocRef(doc_id=paper["doc_id"], native_id=paper.get("native_id"), title=paper.get("title", ""),
                 authors=paper.get("authors") or "", year=paper.get("year"),
                 journal=paper.get("journal") or "", extra=paper.get("extra") or {})
@@ -324,8 +329,9 @@ def write_page(settings: Settings, doc_id: str, paper: dict, classification: dic
 
 
 def process_paper(settings: Settings, client, doc_id: str, paper: dict, classification: dict,
-                   all_classifications: dict, headings: list[str], papers_by_id: dict,
-                   style: CitationStyle, taxonomy: dict[str, FacetSpec]) -> tuple[str, str | None, list[str]]:
+                   all_classifications: dict, system: str, heading_names: list[str],
+                   papers_by_id: dict, style: CitationStyle, taxonomy: dict[str, FacetSpec],
+                   prompt_version: str) -> tuple[str, str | None, list[str]]:
     section_tree = json.loads((settings.sections_dir / f"{doc_id}.json").read_text(encoding="utf-8"))
     pool_text, valid_node_ids = build_node_pool(section_tree)
     metadata_yaml = yaml.safe_dump({
@@ -334,15 +340,15 @@ def process_paper(settings: Settings, client, doc_id: str, paper: dict, classifi
     }, sort_keys=False)
 
     try:
-        page, thin_headings = generate_page(client, settings.bulk_model, doc_id, paper["title"],
-                                             metadata_yaml, headings, pool_text, valid_node_ids, style)
+        page, thin_headings = generate_page(client, settings.bulk_model, doc_id, system, paper["title"],
+                                             metadata_yaml, heading_names, pool_text, valid_node_ids, style)
     except Exception as e:
         return doc_id, str(e), []
 
     related = related_papers(doc_id, classification, all_classifications, taxonomy)
     fulltext_source = paper.get("fulltext_source", "publisher_pdf")
     write_page(settings, doc_id, paper, classification, page, related, fulltext_source,
-               papers_by_id, settings.bulk_model, style, taxonomy)
+               papers_by_id, settings.bulk_model, style, taxonomy, prompt_version)
     return doc_id, None, thin_headings
 
 
@@ -363,7 +369,10 @@ def run(settings: Settings, args) -> None:
     if not settings.api_key:
         sys.exit("API_KEY not found in .env")
 
-    headings = settings.corpus.raw["wiki_headings"]
+    headings_raw = settings.corpus.raw["wiki_headings"]
+    heading_names = [e["name"] for e in heading_entries(headings_raw)]
+    system = build_system_prompt(settings, headings_raw)
+    prompt_version = prompts.stage_prompt_version(system)
 
     # fulltext_source comes from the adapter now (papertrail migration Step 9 —
     # it used to be hardcoded here as "publisher_pdf" for everyone with one
@@ -378,6 +387,7 @@ def run(settings: Settings, args) -> None:
     section_files = sorted(settings.sections_dir.glob("*.json"))
     todo = []
     done = 0
+    stale = 0
     for f in section_files:
         doc_id = f.stem
         if args.only and doc_id != args.only:
@@ -386,11 +396,12 @@ def run(settings: Settings, args) -> None:
             continue  # Stage B hasn't classified this one yet
         if not args.force:
             existing_version = page_prompt_version(settings, doc_id)
-            if existing_version == PROMPT_VERSION:
+            if existing_version == prompt_version:
                 done += 1
                 continue
             if existing_version is not None and not args.regenerate_if_prompt_changed:
                 done += 1
+                stale += 1
                 continue
         todo.append(doc_id)
     if args.limit:
@@ -398,6 +409,9 @@ def run(settings: Settings, args) -> None:
 
     print(f"Section trees: {len(section_files)} | already generated: {done} | "
           f"to generate: {len(todo)}")
+    if stale:
+        print(f"  ({stale} generated with a different prompt version — "
+              f"use --regenerate-if-prompt-changed to redo them)")
     if args.dry_run:
         for d in todo:
             print(f"  [dry-run] {d}")
@@ -414,7 +428,7 @@ def run(settings: Settings, args) -> None:
         futures = {
             executor.submit(process_paper, settings, client, doc_id, papers_by_id[doc_id],
                              all_classifications[doc_id], all_classifications,
-                             headings, papers_by_id, style, taxonomy): doc_id
+                             system, heading_names, papers_by_id, style, taxonomy, prompt_version): doc_id
             for doc_id in todo
         }
         with tqdm(total=len(futures), unit="paper", desc="Generating pages") as pbar:

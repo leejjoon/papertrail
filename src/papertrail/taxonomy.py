@@ -54,6 +54,23 @@ def _heading_names(wiki_headings: list) -> list[str]:
     return [h if isinstance(h, str) else h["name"] for h in wiki_headings]
 
 
+def heading_entries(wiki_headings: list) -> list[dict]:
+    """Normalize each wiki_headings entry to {name, may_not_apply, guidance}
+    — a bare string becomes {name: X, may_not_apply: False, guidance: ''}.
+    `may_not_apply`/`guidance` feed the paper_page prompt's "if a section
+    genuinely doesn't apply" clause (was hardcoded to name one specific
+    heading, "WASP-12b-Specific Findings", literally in the prompt text —
+    papertrail migration Step 9, Seam 2)."""
+    out = []
+    for h in wiki_headings:
+        if isinstance(h, str):
+            out.append({"name": h, "may_not_apply": False, "guidance": ""})
+        else:
+            out.append({"name": h["name"], "may_not_apply": bool(h.get("may_not_apply")),
+                        "guidance": h.get("guidance", "")})
+    return out
+
+
 def load_taxonomy(corpus) -> dict[str, FacetSpec]:
     raw = (corpus.raw.get("taxonomy") or {})
     specs = {}

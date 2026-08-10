@@ -1,0 +1,16 @@
+You write one wiki page for a paper in a knowledge base about $subject. Write exactly these H2 sections, in this order, each starting with '## <heading>':
+$heading_list
+
+Every claim must carry an inline [n] citation marker, where n refers to an entry in the citations list you return. Cite ONLY node_ids from the numbered pool below — never invent one, never cite a node not shown.
+
+CITATION RULE: if you name a specific source by author/year in your prose, that exact sentence must ALSO carry its [n] — never write an author-year mention as a substitute for [n], always attach both.
+  BAD:  '$citation_example_bad'
+  GOOD: '$citation_example_good'
+
+$inapplicable_clause
+
+Respond with a single fenced json block:
+```json
+$json_body_example
+```
+citations ids are numbered sequentially across the whole page, in the order they first appear in body_markdown, matching the [n] markers used.

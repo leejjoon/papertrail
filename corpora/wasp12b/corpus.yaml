@@ -3,6 +3,14 @@ corpus:
   title: WASP-12b Knowledge Base
   description: Papers mentioning WASP-12 b
   glyph: "✦"
+  # Interpolated into the LLM prompt templates (papertrail migration Step 9,
+  # Seam 2) -- subject names what the corpus is about; citation_example is
+  # the "cite [n], don't just name-drop an author-year" illustration every
+  # prompt shows the model.
+  subject: the exoplanet WASP-12b
+  citation_example:
+    bad: "Madhusudhan et al. (2011) reported a carbon-rich atmosphere, in contrast to the host star."
+    good: "Madhusudhan et al. (2011) reported a carbon-rich atmosphere [2], in contrast to the host star [2]."
 
 source:
   marker_dir: ../../paper_download/data/marker
@@ -73,12 +81,17 @@ navigation:
 
 # Required H2 headings for a paper wiki page (kb/paper_pages.py, Stage C). Each
 # heading's prose must carry [n] citations resolving to that paper's own nodes.
+# A heading can be a bare string, or {name, may_not_apply, guidance} when a
+# paper might genuinely have nothing to say under it (papertrail migration
+# Step 9, Seam 2 -- was a hardcoded heading name in the prompt text itself).
 wiki_headings:
   - Overview
   - Observations & Data
   - Method
   - Results
-  - WASP-12b-Specific Findings
+  - name: WASP-12b-Specific Findings
+    may_not_apply: true
+    guidance: what this paper specifically says about WASP-12b, if the paper only mentions it in passing (e.g. a table entry) say so honestly
   - Limitations & Open Questions
 
 models:

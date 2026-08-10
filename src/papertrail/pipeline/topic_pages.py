@@ -35,6 +35,7 @@ from datetime import datetime, timezone
 import yaml
 from tqdm import tqdm
 
+from .. import prompts
 from ..config import Settings, load_settings
 from ..core.citations import find_uncited_author_year_mentions
 from ..core.nodes import iter_leaves
@@ -130,32 +131,14 @@ def node_text_for(settings: Settings, doc_id: str, node_id: str, _cache: dict = 
 # Synthesis LLM call
 # ---------------------------------------------------------------------------
 
-def build_topic_prompt(kind: str, name: str, digests: list[str], pool_lines: list[str]) -> tuple[str, str]:
-    system = (
-        "You write one topic page synthesizing across multiple papers in a "
-        "knowledge base about the exoplanet WASP-12b. Write 2-4 analytical "
-        "paragraphs of prose — no headings, no lists, no links — covering how "
-        "the papers approach this topic, how understanding evolved over time, "
-        "which papers stand out and why, and any visible gaps or disagreements. "
-        "Ground every claim in the provided paper digests and node pool; do not "
-        "invent papers, results, or numbers not present below.\n\n"
-        "Every claim must carry an inline [n] citation marker, where n refers to "
-        "an entry in the citations list you return. Cite ONLY (doc_id, node_id) "
-        "pairs from the numbered pool below — never invent one.\n\n"
-        "CITATION RULE: if you name a specific paper by author/year in your "
-        "prose, that exact sentence must ALSO carry its [n] — never write an "
-        "author-year mention as a substitute for [n], always attach both.\n"
-        "  BAD:  'Yee et al. (2020) confirmed the orbital decay, resolving "
-        "the earlier ambiguity.'\n"
-        "  GOOD: 'Yee et al. (2020) confirmed the orbital decay [3], "
-        "resolving the earlier ambiguity [3].'\n\n"
-        "Respond with a single fenced json block:\n"
-        "```json\n"
-        '{"prose": "paragraph one [1]...\\n\\nparagraph two [2]...",\n'
-        ' "citations": [{"id": 1, "doc_id": "...", "node_id": "0008"}, '
-        '{"id": 2, "doc_id": "...", "node_id": "0042"}]}\n'
-        "```"
-    )
+def build_topic_prompt(settings: Settings, kind: str, name: str, digests: list[str],
+                        pool_lines: list[str]) -> tuple[str, str]:
+    """The system prompt's citation example is corpus.yaml's one canonical
+    citation_example (papertrail migration Step 9, Seam 2) — this used to
+    have its OWN separate hardcoded example (Yee et al. 2020) distinct from
+    paper_pages.py's (Madhusudhan et al. 2011); consolidated to one example
+    per corpus rather than asking a corpus author to write several."""
+    system = prompts.render(settings.corpus, "topic_page.system")
     user = (
         f"# Topic: {kind} = \"{name}\" — {len(digests)} papers\n\n"
         f"# Paper digests\n\n" + "\n\n".join(digests) + "\n\n"
@@ -222,7 +205,7 @@ def synthesize_topic(settings: Settings, client, kind: str, name: str, member_do
             f"{list(digest_headings)!r} — Stage C not run for this group, or "
             f"navigation.digest_headings doesn't match the generated pages")
 
-    system, user = build_topic_prompt(kind, name, digests, pool_lines)
+    system, user = build_topic_prompt(settings, kind, name, digests, pool_lines)
     last_error = None
     for attempt in range(RETRIES + 1):
         max_tokens = 8000 * (2 ** attempt)  # 8000, 16000, 32000, 64000
@@ -338,17 +321,7 @@ def build_index(settings: Settings, client, all_docs: list[dict], groups_by_face
     prose = None
     citations = None
     if digests:
-        system = (
-            "You write the welcoming introduction to a knowledge base about the "
-            "exoplanet WASP-12b, covering all papers that mention it. Write 2-3 "
-            "welcoming, analytical paragraphs of markdown prose — no headings, "
-            "no lists, no links — summarizing the corpus's scope and evolution. "
-            "Every claim must carry an inline [n] citation marker resolving to "
-            "the citations list you return, citing ONLY (doc_id, node_id) pairs "
-            "from the pool below.\n\n"
-            "Respond with a single fenced json block:\n"
-            '```json\n{"prose": "...", "citations": [{"id": 1, "doc_id": "...", "node_id": "..."}]}\n```'
-        )
+        system = prompts.render(settings.corpus, "index_intro.system")
         user = (f"# Corpus stats\n{yaml.safe_dump(stats, sort_keys=False)}\n\n"
                 f"# Representative paper digests\n\n" + "\n\n".join(digests) + "\n\n"
                 f"# Citable node pool\n" + "\n".join(pool_lines))

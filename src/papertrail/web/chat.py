@@ -14,7 +14,8 @@ paper-specific term with no definition in that node) — validate_and_enrich()
 only proves a citation resolves, never that it was read in enough context to
 support the claim next to it. Rather than depend on this gateway's unverified
 tool-calling support, the model can request more of a specific excerpt via a
-`need_context` field in its normal fenced-json response (see SYSTEM_PROMPT);
+`need_context` field in its normal fenced-json response (see the
+"chat.system" prompt template, papertrail.prompts);
 `_expand_excerpts` widens it via the same `context_window` sibling-window
 logic kb/mcp_server.py's `get_section(..., context=N)` uses for the MCP-agent
 path, bounded to one round and to excerpts already retrieved.
@@ -27,6 +28,7 @@ from typing import Iterator
 
 from openai import OpenAI
 
+from .. import prompts
 from ..config import Settings
 from ..core.citations import find_uncited_author_year_mentions, validate_and_enrich
 from ..core.nodes import context_window
@@ -41,41 +43,6 @@ MAX_CONTEXT_REQUESTS = 4       # requests honored per escalation round
 MAX_CONTEXT_WINDOW = 3         # clamp on the requested sibling count
 EXPANDED_CHAR_BUDGET = 4000    # vs. the default 1000 — expansion would be
                                # pointless if immediately truncated back down
-
-SYSTEM_PROMPT = (
-    "You answer questions about a knowledge base of papers mentioning the "
-    "exoplanet WASP-12b. Answer ONLY from the excerpts provided below — each "
-    "labeled with its citable [n], doc_id, and node_id.\n\n"
-    "CITATION RULE — every single claim needs an inline [n] marker, with NO "
-    "exceptions: if you name a study by author/year in your prose (e.g. "
-    "'Madhusudhan et al. (2011)'), that exact sentence must ALSO carry its "
-    "[n] marker for the excerpt it came from. Never write an author-year "
-    "mention as a substitute for [n] — always attach both.\n"
-    "  BAD:  'Madhusudhan et al. (2011) reported a carbon-rich atmosphere, "
-    "in contrast to the host star.'\n"
-    "  GOOD: 'Madhusudhan et al. (2011) reported a carbon-rich atmosphere "
-    "[2], in contrast to the host star [2].'\n\n"
-    "AMBIGUOUS EXCERPTS — each excerpt is one paragraph and can be ambiguous "
-    "read alone: a pronoun or comparison pointing outside itself ('this "
-    "discrepancy,' 'the equilibrium case'), or a paper-specific term with no "
-    "definition in that excerpt (e.g. what a given paper's 'C/O ratio' "
-    "assumes). If you can't be sure what an excerpt actually means, do not "
-    "guess and do not cite it as-is — instead of a final answer, ask for "
-    "more of its surrounding text:\n"
-    "```json\n"
-    '{"need_context": [{"doc_id": "...", "node_id": "...", "context": 2}]}\n'
-    "```\n"
-    "You'll then be shown the same excerpts again with more text around the "
-    "ones you asked about, and must answer for real at that point — you get "
-    "exactly one such request per question, so ask for everything you need "
-    "at once.\n\n"
-    "If the excerpts don't support an answer, say so plainly rather than "
-    "guessing. Otherwise respond with a single fenced json block:\n"
-    "```json\n"
-    '{"answer": "prose with [1] and [2] markers...",\n'
-    ' "citations": [{"id": 1, "doc_id": "...", "node_id": "..."}]}\n'
-    "```"
-)
 
 RETRY_PROMPT_SUFFIX = (
     "\n\nYour previous answer left some named studies without an inline [n] "
@@ -118,12 +85,10 @@ def _condense_history(messages: list[dict], max_turns: int = 6) -> str:
 
 def _rewrite_query(client: OpenAI, settings: Settings, question: str) -> str | None:
     try:
+        content = prompts.render(settings.corpus, "query_rewrite.user", question=question)
         resp = client.chat.completions.create(
             model=settings.bulk_model,
-            messages=[{"role": "user", "content":
-                       "Rewrite this question as 5-8 search keywords "
-                       "(astronomy jargon, synonyms). Output only the "
-                       f"keywords, space-separated: {question}"}],
+            messages=[{"role": "user", "content": content}],
             temperature=0.3, max_tokens=200,
         )
         return (resp.choices[0].message.content or "").strip()
@@ -224,10 +189,12 @@ def stream_chat(settings: Settings, registry: CorpusRegistry, store: Store,
     user_content = (f"Conversation so far:\n{history_text}\n\n" if history_text else "") + \
                    f"Excerpts:\n\n{excerpts_block}\n\nQuestion: {question}"
 
+    system_prompt = prompts.render(settings.corpus, "chat.system")
+
     def call_model(content: str) -> dict | None:
         resp = client.chat.completions.create(
             model=settings.chat_model,
-            messages=[{"role": "system", "content": SYSTEM_PROMPT},
+            messages=[{"role": "system", "content": system_prompt},
                       {"role": "user", "content": content}],
             max_tokens=2000,
             # No `temperature` — this gateway 400s on it for claude-sonnet-5 ("temperature
