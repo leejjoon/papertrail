@@ -34,13 +34,16 @@ search tools and validate_answer/publish_answer silently see two different
 corpora. Now every tool shares the one `settings` this module was built
 with.
 """
+import inspect
 import json
 import os
 import sqlite3
 import uuid
 from datetime import datetime, timezone
+from typing import Annotated, Literal
 
 import yaml
+from pydantic import Field
 
 # The installed `mcp` package (2.x) ships MCPServer under mcp.server.mcpserver,
 # not the mcp.server.fastmcp.FastMCP path kasi_papers_analysis's reference
@@ -55,8 +58,50 @@ from ..core.nodes import context_window
 from ..core.registry import CorpusRegistry
 from ..core.search import format_hits, paper_filters_sql, run_search
 from ..identity import CitationStyle, load_citation_style
+from ..taxonomy import FacetSpec
 
 NO_INDEX_MSG = "Search index not found — run `papertrail index` first."
+
+# Above this many values, a facet's parameter degrades from a JSON-Schema
+# enum (Literal[...]) to a plain string with the vocabulary spelled out in
+# the description — an enum with hundreds of values makes for an unreadable
+# tool schema.
+MAX_ENUM_VALUES = 30
+
+
+def _facet_params(taxonomy: dict[str, FacetSpec]) -> list[inspect.Parameter]:
+    """One optional keyword-only parameter per taxonomy facet, each a real
+    JSON-Schema enum of its values — this is what replaces the hardcoded
+    `research_theme: str | None = None, method: ...` parameter lists
+    search_fulltext/list_papers used to declare. Verified against the
+    installed mcp==2.0.0 (papertrail migration Step 9): a manually assigned
+    __signature__/__annotations__ registers correctly via MCPServer.add_tool()
+    and produces a real enum in the tool's JSON schema; an out-of-vocabulary
+    value is rejected with a pydantic ValidationError surfaced as a ToolError,
+    not silently ignored."""
+    params = []
+    for facet, spec in taxonomy.items():
+        if spec.values and len(spec.values) <= MAX_ENUM_VALUES:
+            ann = Annotated[Literal[tuple(spec.values)] | None,
+                            Field(description=f"filter by {spec.label.lower()}")]
+        else:
+            values_hint = f" — one of: {', '.join(spec.values)}" if spec.values else ""
+            ann = Annotated[str | None, Field(description=f"filter by {spec.label.lower()}{values_hint}")]
+        params.append(inspect.Parameter(facet, inspect.Parameter.KEYWORD_ONLY, default=None, annotation=ann))
+    return params
+
+
+def _bind_signature(fn, params: list[inspect.Parameter], return_annotation, doc: str):
+    """Give `fn` a runtime-built signature (base params + one per taxonomy
+    facet) — must happen BEFORE mcp.add_tool(fn, ...), since that's what
+    inspects fn's signature to build the tool's JSON schema. This is why
+    these tools are registered via add_tool() rather than the @mcp.tool()
+    decorator syntax: the decorator runs at function-definition time, before
+    there's a chance to rewrite the signature."""
+    fn.__signature__ = inspect.Signature(params, return_annotation=return_annotation)
+    fn.__annotations__ = {p.name: p.annotation for p in params} | {"return": return_annotation}
+    fn.__doc__ = doc
+    return fn
 
 
 def canonical_doc_id(db: sqlite3.Connection, doc_id: str, style: CitationStyle) -> str | None:
@@ -105,24 +150,31 @@ def build_server(settings: Settings) -> MCPServer:
             return None
         return json.loads(path.read_text(encoding="utf-8"))
 
-    @mcp.tool()
-    def search_fulltext(query: str, limit: int = 10, research_theme: str | None = None,
-                        method: str | None = None, facility: str | None = None,
-                        role_of_wasp12b: str | None = None) -> str:
-        """Keyword search (FTS5/BM25) over every paper's paragraphs, tables, figure
-        captions, equations, and bibliography entries. Returns hits with the exact
-        (doc_id, node_id) each matched, so a result can be cited directly. Optional
-        taxonomy filters: research_theme, method, facility, role_of_wasp12b — call
-        list_papers() with no arguments to see valid values."""
+    taxonomy = settings.corpus.taxonomy
+
+    def _search_fulltext(query: str, limit: int = 10, **filters) -> str:
         db = get_db()
         if db is None:
             return NO_INDEX_MSG
         try:
-            return format_hits(run_search(db, query, limit, research_theme=research_theme,
-                                          method=method, facility=facility,
-                                          role_of_wasp12b=role_of_wasp12b))
+            return format_hits(run_search(db, query, limit, **filters))
         finally:
             db.close()
+
+    facet_names = ", ".join(taxonomy) or "(none declared)"
+    _bind_signature(
+        _search_fulltext,
+        [inspect.Parameter("query", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=str),
+         inspect.Parameter("limit", inspect.Parameter.POSITIONAL_OR_KEYWORD, default=10, annotation=int),
+         *_facet_params(taxonomy)],
+        str,
+        "Keyword search (FTS5/BM25) over every paper's paragraphs, tables, figure "
+        "captions, equations, and bibliography entries. Returns hits with the exact "
+        "(doc_id, node_id) each matched, so a result can be cited directly. Optional "
+        f"taxonomy filters: {facet_names} — call list_papers() with no arguments to "
+        "see valid values.",
+    )
+    mcp.add_tool(_search_fulltext, name="search_fulltext", description=_search_fulltext.__doc__)
 
     @mcp.tool()
     def get_paper(doc_id: str) -> str:
@@ -233,18 +285,14 @@ def build_server(settings: Settings) -> MCPServer:
                     + "\n".join(f"- {p}" for p in pages))
         return path.read_text(encoding="utf-8")
 
-    @mcp.tool()
-    def list_papers(research_theme: str | None = None, method: str | None = None,
-                    facility: str | None = None, role_of_wasp12b: str | None = None,
-                    year: int | None = None) -> str:
-        """List papers matching the filters as a markdown table. Call with no
-        arguments to see the available taxonomy values and overall corpus
-        coverage (how many entries have full text vs. metadata only)."""
+    table_columns = settings.corpus.navigation.table_columns
+
+    def _list_papers(year: int | None = None, **filters) -> str:
         db = get_db()
         if db is None:
             return NO_INDEX_MSG
         try:
-            if not any([research_theme, method, facility, role_of_wasp12b, year]):
+            if year is None and not any(filters.values()):
                 # facet, value -> distinct values, one indexed query instead of a
                 # full-table scan + per-row json.loads (papertrail migration Step 7).
                 facet_values: dict[str, set] = {}
@@ -254,15 +302,13 @@ def build_server(settings: Settings) -> MCPServer:
                          if r["year"]}
                 total = db.execute("SELECT COUNT(*) FROM docs").fetchone()[0]
                 full = db.execute("SELECT COUNT(*) FROM docs WHERE has_fulltext = 1").fetchone()[0]
-                return (f"{total} papers indexed ({full} with full text, "
-                        f"{total - full} metadata-only). Filter values —\n"
-                        f"- research_theme: {', '.join(sorted(facet_values.get('research_theme', ())))}\n"
-                        f"- method: {', '.join(sorted(facet_values.get('method', ())))}\n"
-                        f"- facility: {', '.join(sorted(facet_values.get('facility', ())))}\n"
-                        f"- role_of_wasp12b: {', '.join(sorted(facet_values.get('role_of_wasp12b', ())))}\n"
-                        f"- year: {', '.join(map(str, sorted(years)))}")
-            where, params = paper_filters_sql(research_theme, method, facility,
-                                              role_of_wasp12b, year)
+                lines = [f"{total} papers indexed ({full} with full text, "
+                        f"{total - full} metadata-only). Filter values —"]
+                for facet in taxonomy:
+                    lines.append(f"- {facet}: {', '.join(sorted(facet_values.get(facet, ())))}")
+                lines.append(f"- year: {', '.join(map(str, sorted(years)))}")
+                return "\n".join(lines)
+            where, params = paper_filters_sql(year=year, **filters)
             rows = db.execute(
                 f"SELECT * FROM docs d WHERE 1=1{where} ORDER BY d.year, d.doc_id",
                 params).fetchall()
@@ -270,17 +316,30 @@ def build_server(settings: Settings) -> MCPServer:
             db.close()
         if not rows:
             return "No papers match those filters."
-        lines = ["| doc_id | Year | Title | Role | Facility | Fulltext |",
-                 "|---|---|---|---|---|---|"]
+        headers = ["doc_id", "Year", "Title"] + [taxonomy[c].label for c in table_columns] + ["Fulltext"]
+        lines = ["| " + " | ".join(headers) + " |", "|" + "|".join(["---"] * len(headers)) + "|"]
         for r in rows:
             facets = json.loads(r["facets_json"] or "{}")
-            facs = ", ".join(facets.get("facility") or [])
             title = (r["title"] or "")[:70]
-            lines.append(f"| {r['doc_id']} | {r['year']} | {title} "
-                         f"| {facets.get('role_of_wasp12b') or ''} | {facs} "
-                         f"| {'yes' if r['has_fulltext'] else 'no'} |")
+            cells = [r["doc_id"], str(r["year"] or ""), title]
+            for col in table_columns:
+                v = facets.get(col)
+                cells.append(", ".join(v) if isinstance(v, list) else (v or ""))
+            cells.append("yes" if r["has_fulltext"] else "no")
+            lines.append("| " + " | ".join(cells) + " |")
         lines.append(f"\n{len(rows)} paper(s).")
         return "\n".join(lines)
+
+    _bind_signature(
+        _list_papers,
+        [inspect.Parameter("year", inspect.Parameter.KEYWORD_ONLY, default=None, annotation=int | None),
+         *_facet_params(taxonomy)],
+        str,
+        "List papers matching the filters as a markdown table. Call with no "
+        "arguments to see the available taxonomy values and overall corpus "
+        "coverage (how many entries have full text vs. metadata only).",
+    )
+    mcp.add_tool(_list_papers, name="list_papers", description=_list_papers.__doc__)
 
     @mcp.tool(structured_output=False)  # Image isn't a pydantic-schema-able type —
                                          # this SDK tries to build an output model

@@ -39,19 +39,27 @@ class CorpusConfigError(Exception):
 
 @dataclass(frozen=True)
 class Corpus:
-    """Parsed corpus.yaml. Minimal for now — just enough for path
-    resolution (Step 4) and pipeline-stage needs (Step 6). Taxonomy/
-    identity/prompt/branding semantics land as typed fields in the
-    papertrail migration's Step 9 (the four genericity seams); until then,
-    `raw` carries the full parsed YAML so nothing already written against
-    corpus.yaml's existing keys (research_theme, wiki_headings, ...) is
-    blocked on this refactor."""
+    """Parsed corpus.yaml. `raw` carries the full parsed YAML — nothing
+    already written against corpus.yaml's existing keys is blocked on
+    this refactor; `taxonomy`/`navigation` below are typed, validated
+    views over raw["taxonomy"]/raw["navigation"] (papertrail migration
+    Step 9, Seam 3)."""
     root: Path
     raw: dict = field(default_factory=dict)
 
     @property
     def name(self) -> str:
         return (self.raw.get("corpus") or {}).get("name") or self.root.name
+
+    @property
+    def taxonomy(self):
+        from .taxonomy import load_taxonomy
+        return load_taxonomy(self)
+
+    @property
+    def navigation(self):
+        from .taxonomy import load_navigation
+        return load_navigation(self, self.taxonomy, self.raw.get("wiki_headings") or [])
 
     def marker_dir(self) -> Path:
         raw = self.raw["source"]["marker_dir"]

@@ -51,16 +51,15 @@ def search_nodes(settings: Settings, query: str, limit: int = 12) -> list[dict]:
         conn.close()
 
 
-def paper_filters_sql(research_theme=None, method=None, facility=None,
-                      role_of_wasp12b=None, year=None) -> tuple[str, list]:
+def paper_filters_sql(year=None, **facet_filters) -> tuple[str, list]:
     """Build a ` AND EXISTS (...)`-per-filter clause against doc_facets —
     replaces the pre-Step-7 `d.research_theme_json LIKE '%"value"%'` style,
     which matched substrings and could collide two different facets sharing
-    a value name. The four facet names are still literals here (Step 9's
-    job to make this taxonomy-driven); only the storage/query shape changed."""
+    a value name. Facet names are now caller-supplied kwargs (papertrail
+    migration Step 9's taxonomy-driven MCP tool signatures), not literals —
+    any facet corpus.yaml declares works here with no code change."""
     clauses, params = [], []
-    for facet, value in (("research_theme", research_theme), ("method", method),
-                        ("facility", facility), ("role_of_wasp12b", role_of_wasp12b)):
+    for facet, value in facet_filters.items():
         if value:
             clauses.append("EXISTS (SELECT 1 FROM doc_facets f "
                           "WHERE f.doc_id = d.doc_id AND f.facet = ? AND f.value = ?)")

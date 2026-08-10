@@ -19,9 +19,16 @@ identity:
 
 # Facets an LLM tags each paper with (kb/classify.py, Stage B). `values` is the
 # closed vocabulary shown to the model; `multi: true` allows more than one value.
+# `topic_pages`/`slug_prefix`/`similarity_weight`/`label` control how each facet
+# is used downstream (Stage D topic pages, Stage C related-paper scoring, the
+# web app's doc tree/tables) -- papertrail migration Step 9, Seam 3.
 taxonomy:
   research_theme:
     multi: true
+    label: Theme
+    topic_pages: true
+    slug_prefix: theme
+    similarity_weight: 2
     values:
       - orbital-decay
       - atmosphere-composition
@@ -35,13 +42,32 @@ taxonomy:
       - survey-catalog-mention
   method:
     multi: true
+    topic_pages: true
+    slug_prefix: method
+    # 0 (not 1) reproduces this corpus's pre-Step-9 behavior exactly: method
+    # was never scored for related-paper similarity, likely an oversight
+    # rather than a deliberate choice -- see the migration plan's "don't
+    # abstract yet" note. Change to 1 in a separate, deliberate commit.
+    similarity_weight: 0
     values: [photometry, spectroscopy, radial-velocity, theory-modeling, radio]
   facility:
     multi: true
+    topic_pages: true
+    slug_prefix: facility
+    similarity_weight: 2
     values: [HST, Spitzer, JWST, TESS, Kepler, ground-based, theoretical-only]
   role_of_wasp12b:
     multi: false
+    label: Role
+    topic_pages: false
+    similarity_weight: 1
     values: [primary-target, incidental-mention]
+
+navigation:
+  tree_facet: research_theme        # groups the web app's left-nav doc tree
+  table_columns: [role_of_wasp12b, facility]   # MCP list_papers' table columns
+  year_pages: true
+  digest_headings: [Overview, "WASP-12b-Specific Findings"]
 
 # Required H2 headings for a paper wiki page (kb/paper_pages.py, Stage C). Each
 # heading's prose must carry [n] citations resolving to that paper's own nodes.

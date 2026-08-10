@@ -31,6 +31,7 @@ from ..config import Settings, load_settings
 from ..core.citations import find_uncited_author_year_mentions
 from ..core.nodes import iter_leaves
 from ..identity import CitationStyle, DocRef, load_citation_style
+from ..taxonomy import FacetSpec, topic_page_facets
 from ..textutils import slugify
 from .llm import get_client
 
@@ -216,39 +217,47 @@ def generate_page(client, model: str, doc_id: str, title: str, metadata_yaml: st
 # Deterministic parts — related papers, links footer, frontmatter
 # ---------------------------------------------------------------------------
 
+def _as_set(value) -> set:
+    if isinstance(value, list):
+        return set(value)
+    return {value} if value else set()
+
+
+def similarity_score(mine: dict, other: dict, taxonomy: dict[str, FacetSpec]) -> int:
+    """Generic replacement for the old hardcoded
+    `2*theme_overlap + 2*facility_overlap + (1 if same role else 0)`. For a
+    single-valued facet, `len({x} & {y})` IS `1 if x == y else 0` — no
+    special-casing needed between multi/single facets."""
+    return sum(spec.similarity_weight * len(_as_set(mine.get(facet)) & _as_set(other.get(facet)))
+               for facet, spec in taxonomy.items() if spec.similarity_weight)
+
+
 def related_papers(doc_id: str, classification: dict, all_classifications: dict[str, dict],
-                    limit: int = MAX_RELATED) -> list[dict]:
-    my_theme = set(classification.get("research_theme") or [])
-    my_facility = set(classification.get("facility") or [])
-    my_role = classification.get("role_of_wasp12b")
+                    taxonomy: dict[str, FacetSpec], limit: int = MAX_RELATED) -> list[dict]:
     scored = []
     for other_id, other in all_classifications.items():
         if other_id == doc_id:
             continue
-        score = (2 * len(my_theme & set(other.get("research_theme") or []))
-                 + 2 * len(my_facility & set(other.get("facility") or []))
-                 + (1 if other.get("role_of_wasp12b") == my_role else 0))
+        score = similarity_score(classification, other, taxonomy)
         if score > 0:
             scored.append((score, other_id))
     scored.sort(key=lambda t: (-t[0], t[1]))
     return [{"doc_id": d, "score": s} for s, d in scored[:limit]]
 
 
-def slug_for(kind: str, value: str) -> str:
-    return f"{kind}-{slugify(value)}"
+def slug_for(spec: FacetSpec, value: str) -> str:
+    return f"{spec.slug_prefix}-{slugify(value)}"
 
 
-def links_footer(classification: dict, related: list[dict], ref: DocRef,
-                  all_papers_by_id: dict, style: CitationStyle) -> str:
+def links_footer(classification: dict, related: list[dict], ref: DocRef, all_papers_by_id: dict,
+                  style: CitationStyle, taxonomy: dict[str, FacetSpec]) -> str:
     lines = ["## Links"]
-    themes = classification.get("research_theme") or []
-    if themes:
-        theme_links = " | ".join(f"[{t}](../topics/{slug_for('theme', t)}.md)" for t in themes)
-        lines.append(f"- Themes: {theme_links}")
-    facilities = classification.get("facility") or []
-    if facilities:
-        fac_links = " | ".join(f"[{f}](../topics/{slug_for('facility', f)}.md)" for f in facilities)
-        lines.append(f"- Facility: {fac_links}")
+    for spec in topic_page_facets(taxonomy):
+        values = classification.get(spec.name)
+        values = values if isinstance(values, list) else ([values] if values else [])
+        if values:
+            links = " | ".join(f"[{v}](../topics/{slug_for(spec, v)}.md)" for v in values)
+            lines.append(f"- {spec.label}: {links}")
     if related:
         rel_links = ", ".join(
             f"[{r['doc_id']}]({r['doc_id']}.md) \"{all_papers_by_id.get(r['doc_id'], {}).get('title', '')}\""
@@ -261,7 +270,7 @@ def links_footer(classification: dict, related: list[dict], ref: DocRef,
 
 
 def front_matter(paper: dict, classification: dict, related: list[dict],
-                  fulltext_source: str, model: str) -> str:
+                  fulltext_source: str, model: str, taxonomy: dict[str, FacetSpec]) -> str:
     fm = {
         "doc_id": paper["doc_id"],
         "title": paper["title"],
@@ -269,15 +278,13 @@ def front_matter(paper: dict, classification: dict, related: list[dict],
         "journal": paper.get("journal"),
         "authors": paper.get("authors"),
         "fulltext_source": fulltext_source,
-        "research_theme": classification.get("research_theme") or [],
-        "method": classification.get("method") or [],
-        "facility": classification.get("facility") or [],
-        "role_of_wasp12b": classification.get("role_of_wasp12b"),
-        "related_papers": related,
-        "generator": {
-            "model": model, "prompt_version": PROMPT_VERSION,
-            "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        },
+    }
+    for facet, spec in taxonomy.items():
+        fm[facet] = classification.get(facet) or ([] if spec.multi else None)
+    fm["related_papers"] = related
+    fm["generator"] = {
+        "model": model, "prompt_version": PROMPT_VERSION,
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
     return yaml.safe_dump(fm, sort_keys=False, allow_unicode=True)
 
@@ -297,12 +304,12 @@ def page_prompt_version(settings: Settings, doc_id: str) -> str | None:
 
 def write_page(settings: Settings, doc_id: str, paper: dict, classification: dict, page: dict,
                 related: list[dict], fulltext_source: str, all_papers_by_id: dict, model: str,
-                style: CitationStyle) -> None:
-    fm = front_matter(paper, classification, related, fulltext_source, model)
+                style: CitationStyle, taxonomy: dict[str, FacetSpec]) -> None:
+    fm = front_matter(paper, classification, related, fulltext_source, model, taxonomy)
     ref = DocRef(doc_id=paper["doc_id"], native_id=paper.get("native_id"), title=paper.get("title", ""),
                 authors=paper.get("authors") or "", year=paper.get("year"),
                 journal=paper.get("journal") or "", extra=paper.get("extra") or {})
-    footer = links_footer(classification, related, ref, all_papers_by_id, style)
+    footer = links_footer(classification, related, ref, all_papers_by_id, style, taxonomy)
     content = f"---\n{fm}---\n\n# {paper['title']}\n\n{page['body_markdown']}\n\n{footer}\n"
     out_path = settings.wiki_dir / "papers" / f"{doc_id}.md"
     tmp = out_path.with_suffix(".md.tmp")
@@ -317,15 +324,13 @@ def write_page(settings: Settings, doc_id: str, paper: dict, classification: dic
 
 
 def process_paper(settings: Settings, client, doc_id: str, paper: dict, classification: dict,
-                   all_classifications: dict, headings: list[str],
-                   papers_by_id: dict, style: CitationStyle) -> tuple[str, str | None, list[str]]:
+                   all_classifications: dict, headings: list[str], papers_by_id: dict,
+                   style: CitationStyle, taxonomy: dict[str, FacetSpec]) -> tuple[str, str | None, list[str]]:
     section_tree = json.loads((settings.sections_dir / f"{doc_id}.json").read_text(encoding="utf-8"))
     pool_text, valid_node_ids = build_node_pool(section_tree)
     metadata_yaml = yaml.safe_dump({
         "title": paper["title"], "year": paper.get("year"), "journal": paper.get("journal"),
-        "research_theme": classification.get("research_theme"),
-        "method": classification.get("method"), "facility": classification.get("facility"),
-        "role_of_wasp12b": classification.get("role_of_wasp12b"),
+        **{facet: classification.get(facet) for facet in taxonomy},
     }, sort_keys=False)
 
     try:
@@ -334,10 +339,10 @@ def process_paper(settings: Settings, client, doc_id: str, paper: dict, classifi
     except Exception as e:
         return doc_id, str(e), []
 
-    related = related_papers(doc_id, classification, all_classifications)
+    related = related_papers(doc_id, classification, all_classifications, taxonomy)
     fulltext_source = paper.get("fulltext_source", "publisher_pdf")
     write_page(settings, doc_id, paper, classification, page, related, fulltext_source,
-               papers_by_id, settings.bulk_model, style)
+               papers_by_id, settings.bulk_model, style, taxonomy)
     return doc_id, None, thin_headings
 
 
@@ -402,13 +407,14 @@ def run(settings: Settings, args) -> None:
 
     client = get_client(settings)
     style = load_citation_style(settings.corpus)
+    taxonomy = settings.corpus.taxonomy
     failed = []
     thin_report = {}
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = {
             executor.submit(process_paper, settings, client, doc_id, papers_by_id[doc_id],
                              all_classifications[doc_id], all_classifications,
-                             headings, papers_by_id, style): doc_id
+                             headings, papers_by_id, style, taxonomy): doc_id
             for doc_id in todo
         }
         with tqdm(total=len(futures), unit="paper", desc="Generating pages") as pbar:
