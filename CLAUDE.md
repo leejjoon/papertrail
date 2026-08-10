@@ -12,15 +12,27 @@ being extracted into a reusable, corpus-agnostic package, `papertrail`
 (`src/papertrail/`), with wasp12b becoming its first consumer corpus
 (`corpora/wasp12b/`). Full plan: `.claude/plans/i-would-like-to-stateless-hellman.md`.
 
-**As of this writing: Steps 0–10 of that plan are done, verified against a
-`corpora/wasp12b/` copy, and committed — but NOT yet cut over.** `kb/` below is still the
-ground truth for the real corpus's `kb/data/`/`kb/wiki/`. Don't delete it, and don't
-point the live processes at `corpora/wasp12b/` or `src/papertrail/`'s schema without an
-explicit, deliberate cutover (restarting both services, reconnecting the MCP server) —
-that's Step 12 territory, done once the remaining migration steps (a demo-corpus proof)
-are complete. Until then, treat `src/papertrail/` + `corpora/wasp12b/` as
-verified-but-inert: real code, real tests, real LLM round-trips against a copy of the
-data, but not yet the thing that's supposed to be serving requests.
+**As of this writing: all 12 steps of that plan are done, verified, and committed
+(through `472d769`) — including Step 12's `corpora/demo/` proof corpus, which ran the
+full A→E pipeline against a deliberately different taxonomy/subject/citation style and
+confirmed the genericity is real (it also caught and fixed one real bug: `pipeline/
+index.py` had a leftover hardcoded facet-name tuple that silently dropped any facet not
+in wasp12b's specific four — see that commit's message). What remains is NOT another
+migration step — it's a separate, deliberate decision, not yet made: the live cutover**
+(swap the real `kb/data/kb.sqlite` to the new schema, point `kb/corpus.yaml` at the new
+seam fields or replace `kb/`'s data with `corpora/wasp12b/`'s, restart both live
+services, have Claude Code reconnect the MCP server). **`kb/` below is still the ground
+truth for the real corpus's `kb/data/`/`kb/wiki/`. Don't delete it, and don't point the
+live processes at `corpora/wasp12b/` or `src/papertrail/`'s schema without that explicit
+cutover.** Until then, treat `src/papertrail/` + `corpora/wasp12b/` + `corpora/demo/` as
+verified-but-inert: real code, real tests, real LLM round-trips against real (copied or
+throwaway) data, but not yet the thing that's supposed to be serving requests.
+
+For what papertrail actually *is* now that the extraction is done — install, quickstart,
+full CLI/config/API reference, how to adopt it for a new corpus, how to modify it — see
+`README.md`, `QUICKSTART.md`, `USERS_GUIDE.md`, `REFERENCE.md`, and `DEVELOPERS_GUIDE.md`
+at the repo root. This file stays scoped to *this repo's* live-vs-migrated operational
+state; it does not re-explain papertrail itself.
 
 **Important nuance, don't skip this:** "not yet cut over" describes intent, not the
 current on-disk reality — the code moves already happened underneath the still-running

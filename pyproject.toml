@@ -13,13 +13,19 @@ dependencies = [
     "beautifulsoup4>=4.12",
     "tqdm>=4.66",
     "openai>=1.0",
+    # core/renderer.py does `import markdown` at module level. mcp/server.py
+    # imports core.registry -> core.renderer at module level too (CorpusRegistry
+    # is needed for validate_answer/publish_answer, not just HTML rendering) —
+    # so `pip install papertrail[mcp]` without `[web]` still needs this or
+    # `import papertrail.mcp.server` raises ModuleNotFoundError. Belongs in
+    # core deps, not the web extra, until that import is made lazy.
+    "markdown>=3.5",
 ]
 
 [project.optional-dependencies]
 web = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
-    "markdown>=3.5",
 ]
 mcp = [
     # mcp_server.py uses mcp.server.mcpserver.MCPServer + run(transport=,

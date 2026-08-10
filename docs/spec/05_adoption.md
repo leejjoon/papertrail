@@ -11,15 +11,19 @@ hardcoded in five separate places. That gap is the entire reason the `papertrail
 extraction exists — see the migration plan for the full account. This doc now describes
 the *actual* adoption path once the extraction is complete, not an aspirational one.
 
-**Status:** as of this writing, `src/papertrail/` + `corpora/wasp12b/` implement and
-verify everything below against wasp12b (Steps 0–10 of the migration plan) — real
-corpus.yaml keys, real code, real LLM round-trips, all diffed against the pre-migration
-baseline. What *hasn't* happened yet is Step 12: actually building a second corpus
-end-to-end as the real proof. Until that lands, treat the checklist below as
-well-verified in the single-corpus sense (every genericity seam works correctly *for*
-wasp12b) but not yet proven in the "a second, differently-shaped corpus also works"
-sense — that's deliberate, not an oversight (see `00_overview.md`'s reasoning on why a
-hypothetical second example is worse than none).
+**Status:** as of this writing, all 12 steps of the migration plan are done, including
+Step 12 — `corpora/demo/` is a real, differently-shaped second corpus (2-facet taxonomy
+vs. wasp12b's four, 3 wiki headings vs. six, a different `subject`, `citation_style:
+plain`, no external links, a from-scratch filename-stem adapter instead of one wrapping
+an existing loader) run end-to-end through Stages A–E and served over both the web app
+and MCP server. The checklist below is now proven in the "a second, differently-shaped
+corpus also works" sense, not just verified for wasp12b — and Step 12 caught one real
+genericity bug in the process (`pipeline/index.py` had a leftover hardcoded facet-name
+tuple that silently dropped any facet not in wasp12b's specific four; fixed, see that
+commit). For the practical, task-organized version of this checklist plus a full
+reference of every `corpus.yaml` key/CLI flag/API endpoint, see `USERS_GUIDE.md` and
+`REFERENCE.md` at the repo root — this document remains the design-rationale account of
+*why* each seam is shaped the way it is, not the primary how-to anymore.
 
 ## What's generic vs. corpus-specific, for real this time
 

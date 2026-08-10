@@ -155,10 +155,13 @@ different corpus per `05_adoption.md`. No auth, no CORS hardening, bind `127.0.0
 (kasi's docker-compose comment: "the server has no auth… do NOT bind 0.0.0.0 here" —
 same warning applies here even without Docker).
 
-*(Migration note: `papertrail`'s equivalent is `--corpus PATH` or `PAPERTRAIL_CORPUS`,
-serving via `.venv/bin/papertrail serve --corpus corpora/wasp12b` /
-`uvicorn papertrail.web.asgi:app`, with `KB_DIR`/`KB_SQLITE` still honored for one
-release as a compatibility alias — see `05_adoption.md` step 9. Not yet the live command.)*
+*(Migration note, corrected: there is no `papertrail serve` subcommand and no `--corpus`
+flag for the web app — `web/asgi.py`'s module-level `app = create_app(...)` resolves the
+corpus from `PAPERTRAIL_CORPUS`/`KB_DIR`/upward-search only, same as the MCP server used
+to. The real command is `PAPERTRAIL_CORPUS=corpora/wasp12b uvicorn
+papertrail.web.asgi:app`, with `KB_DIR`/`KB_SQLITE` still honored for one release as a
+compatibility alias. See `REFERENCE.md` for the full env-var table. Not yet the live
+command.)*
 
 Static export (P4, `00_overview.md` roadmap): `build_static.py` ported from the
 navigator, extended to also bake a chosen conversation's full message history

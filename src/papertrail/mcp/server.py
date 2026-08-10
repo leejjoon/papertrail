@@ -34,6 +34,7 @@ search tools and validate_answer/publish_answer silently see two different
 corpora. Now every tool shares the one `settings` this module was built
 with.
 """
+import argparse
 import inspect
 import json
 import os
@@ -415,8 +416,20 @@ def build_server(settings: Settings) -> MCPServer:
     return mcp
 
 
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run the papertrail MCP server.")
+    parser.add_argument("--corpus", metavar="PATH")
+    return parser
+
+
 def main(argv=None) -> None:
-    settings = load_settings()
+    # --corpus, matching every pipeline stage's parent parser — previously
+    # absent, so `papertrail mcp --corpus X` silently ignored X and fell back
+    # to PAPERTRAIL_CORPUS/KB_DIR/upward-search, serving whatever corpus that
+    # resolved to with no error. No create_dirs=True: the MCP server, like the
+    # web app, never creates directories (config.py's docstring).
+    args = build_arg_parser().parse_args(argv)
+    settings = load_settings(args.corpus)
     mcp = build_server(settings)
     transport = os.getenv("MCP_TRANSPORT", "stdio")
     if transport in ("http", "streamable-http"):
