@@ -380,6 +380,13 @@ def run(settings: Settings, args) -> None:
         doc_id = p["doc_id"]
         if args.only and doc_id != args.only:
             continue
+        # load_papers() returns every known entry (papertrail migration Step 9
+        # merged load()/load_all_including_stubs() into one adapter function) —
+        # has_fulltext is None for a corpus whose adapter doesn't supply it (a
+        # minimal adapter, 05_adoption.md), in which case fall through to the
+        # marker-file check below rather than silently skipping everything.
+        if p.get("has_fulltext") is False:
+            continue  # known no-PDF entry — not worth a "no marker JSON" report line
         marker_path = marker_dir / f"{doc_id}.json"
         if not marker_path.exists():
             no_marker.append(doc_id)

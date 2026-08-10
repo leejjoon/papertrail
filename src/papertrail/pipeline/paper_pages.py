@@ -360,12 +360,11 @@ def run(settings: Settings, args) -> None:
 
     headings = settings.corpus.raw["wiki_headings"]
 
+    # fulltext_source comes from the adapter now (papertrail migration Step 9 —
+    # it used to be hardcoded here as "publisher_pdf" for everyone with one
+    # bibcode-literal exception; the adapter already computes it correctly
+    # from the PDF fetch manifest, so this stage just reads it).
     papers_by_id = {p["doc_id"]: p for p in settings.corpus.load_papers()}
-    for doc_id, p in papers_by_id.items():
-        p["fulltext_source"] = "publisher_pdf"
-    # honor the one known arXiv-preprint substitution (see docs/spec/00_overview.md)
-    if "2010RPPh...73a6901B" in papers_by_id:
-        papers_by_id["2010RPPh...73a6901B"]["fulltext_source"] = "arxiv_preprint"
 
     all_classifications = {}
     for f in settings.classification_dir.glob("*.yaml"):

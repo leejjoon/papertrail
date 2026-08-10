@@ -122,7 +122,17 @@ def run(settings: Settings) -> None:
     schema.ensure_persistent(conn)   # never dropped
     schema.rebuild_content(conn)     # drop + recreate docs/nodes/doc_facets/chunks_fts
 
-    papers_by_id = {p["doc_id"]: p for p in settings.corpus.load_papers()}
+    # One adapter entry point now (papertrail migration Step 9 — this used to
+    # be TWO: load_papers() above (no has_fulltext/fulltext_source at all,
+    # forcing this stage to hardcode "arxiv_preprint" for one bibcode literal
+    # and "publisher_pdf" for everyone else) plus a second, undeclared
+    # `adapter.load_all_including_stubs()` reached via a bare `from
+    # kb.adapters import wasp12b`, bypassing corpus.yaml's metadata_adapter
+    # mechanism. The adapter now always returns every known entry with
+    # has_fulltext/fulltext_source computed correctly, so both the full-doc
+    # and stub-doc loops below just read them.
+    papers = settings.corpus.load_papers()
+    papers_by_id = {p["doc_id"]: p for p in papers}
     section_files = {f.stem for f in settings.sections_dir.glob("*.json")}
 
     full_count = 0
@@ -131,13 +141,12 @@ def run(settings: Settings) -> None:
         if paper is None:
             continue
         cls = load_classification(settings, doc_id)
-        fulltext_source = "arxiv_preprint" if doc_id == "2010RPPh...73a6901B" else "publisher_pdf"
+        fulltext_source = paper.get("fulltext_source") or "publisher_pdf"
         insert_full_doc(conn, settings, doc_id, paper, cls, fulltext_source)
         full_count += 1
 
     stub_count = 0
-    adapter = settings.corpus.adapter_module()
-    for entry in adapter.load_all_including_stubs():
+    for entry in papers:
         if entry.get("has_fulltext"):
             continue  # already indexed above, or will be once Stages A-D catch up
         if entry["doc_id"] in section_files:
