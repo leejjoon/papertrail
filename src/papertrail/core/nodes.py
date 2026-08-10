@@ -21,6 +21,21 @@ def iter_nodes(structure: list[dict]) -> Iterator[dict]:
             yield from iter_nodes(node["nodes"])
 
 
+def iter_leaves(structure: list[dict]) -> list[dict]:
+    """Every leaf node (paragraph/table/figure/equation/footnote/reference),
+    depth-first, containers themselves excluded. <- kb/paper_pages.py's
+    flatten_leaves, used by both Stage C (build_node_pool) and Stage D
+    (node_text_for) — moved here so pipeline stages don't import from each
+    other for a pure tree-walking helper."""
+    out = []
+    for n in structure:
+        if n["kind"] == "container":
+            out.extend(iter_leaves(n["nodes"]))
+        else:
+            out.append(n)
+    return out
+
+
 def _flatten_by_id(structure: list[dict], parent_title: str | None = None) -> dict[str, dict]:
     """Flat {node_id: node}. Leaf nodes get a synthetic '_parent_title' (their
     nearest enclosing heading) so a citation to one paragraph can still show

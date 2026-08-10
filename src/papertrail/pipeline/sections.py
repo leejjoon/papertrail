@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stage A — Marker JSON -> section-tree JSON + image assets.
 
-For each paper's paper_download/data/marker/<doc_id>.json, walks Datalab's
+For each paper's <marker_dir>/<doc_id>.json, walks Datalab's
 Document -> Page -> leaf-block tree and assembles a navigator-compatible section
 tree with paragraph/table/figure/equation/footnote/reference granularity (see
 docs/spec/01_data_contracts.md for the full schema and rationale). Fully
@@ -20,10 +20,10 @@ from (kb/03_extract_text.py there):
     reconversion needed, just decode-and-write here.
 
 Usage:
-    python3 kb/build_sections.py --dry-run
-    python3 kb/build_sections.py
-    python3 kb/build_sections.py --only 2013Icar..225..432S
-    python3 kb/build_sections.py --force
+    papertrail sections --dry-run
+    papertrail sections
+    papertrail sections --only 2013Icar..225..432S
+    papertrail sections --force
 """
 import argparse
 import base64
@@ -32,14 +32,11 @@ import itertools
 import json
 import os
 import re
-import sys
-from pathlib import Path
 
 from bs4 import BeautifulSoup, NavigableString, Tag
 from tqdm import tqdm
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from kb import config
+from ..config import Settings, load_settings
 
 # Block types with no citable content of their own — recursed into (Page) or
 # dropped outright (structural/decorative). Picture = uncaptioned image (no
@@ -49,7 +46,7 @@ DROP_TYPES = {"PageHeader", "PageFooter", "Picture", "TableOfContents"}
 
 
 # ---------------------------------------------------------------------------
-# Inline HTML -> lightweight markdown text (kasi's InlineCleaner, ported to bs4)
+# Inline HTML -> markdown-ish text
 # ---------------------------------------------------------------------------
 
 def _render_inline(node) -> str:
@@ -145,9 +142,9 @@ def parse_list_items(html: str) -> list[str]:
 # Image extraction
 # ---------------------------------------------------------------------------
 
-def extract_image_asset(block: dict, doc_id: str) -> str | None:
+def extract_image_asset(block: dict, doc_id: str, assets_dir) -> str | None:
     """Decode the first (typically only) image in a Figure block's `images`
-    field to kb/data/assets/<doc_id>/<block_id_slug>.jpeg. Returns the relative
+    field to <assets_dir>/<doc_id>/<block_id_slug>.jpeg. Returns the relative
     path stored in the node's image_asset field, or None if no image present."""
     images = block.get("images") or {}
     if not images:
@@ -155,7 +152,7 @@ def extract_image_asset(block: dict, doc_id: str) -> str | None:
     _, b64data = next(iter(images.items()))
     block_id = block.get("id") or ""
     slug = block_id.strip("/").replace("/", "_") or f"block_{block.get('page', 0)}"
-    out_dir = config.ASSETS_DIR / doc_id
+    out_dir = assets_dir / doc_id
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{slug}.jpeg"
     try:
@@ -169,7 +166,7 @@ def extract_image_asset(block: dict, doc_id: str) -> str | None:
 # Section-tree assembly (stack-based, one pass over each Page's flat children)
 # ---------------------------------------------------------------------------
 
-def build_tree(doc: dict, doc_id: str) -> list[dict]:
+def build_tree(doc: dict, doc_id: str, assets_dir=None) -> list[dict]:
     counter = itertools.count(1)
     root_nodes: list[dict] = []
     stack = [{"level": 0, "nodes": root_nodes}]
@@ -235,7 +232,7 @@ def build_tree(doc: dict, doc_id: str) -> list[dict]:
                     node = {"node_id": next_id(), "kind": "leaf", "block_type": "figure",
                             "text": caption_text or "",
                             "page": block.get("page"), "source_block_ids": source_ids}
-                    image_asset = extract_image_asset(block, doc_id)
+                    image_asset = extract_image_asset(block, doc_id, assets_dir) if assets_dir else None
                     if image_asset:
                         node["image_asset"] = image_asset
                 if caption_text:
@@ -317,7 +314,7 @@ def count_nodes(nodes: list[dict]) -> tuple[int, int]:
     return total, refs
 
 
-def sha256_of(path: Path) -> str:
+def sha256_of(path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(1 << 20), b""):
@@ -325,7 +322,7 @@ def sha256_of(path: Path) -> str:
     return h.hexdigest()
 
 
-def process_one(doc_id: str, marker_path: Path) -> dict:
+def process_one(settings: Settings, doc_id: str, marker_path) -> dict:
     """Returns a stats dict: {doc_id, node_count, ref_count, page_count, ok}."""
     marker_sha = sha256_of(marker_path)
     data = json.loads(marker_path.read_text(encoding="utf-8"))
@@ -333,7 +330,7 @@ def process_one(doc_id: str, marker_path: Path) -> dict:
     if isinstance(doc, str):
         doc = json.loads(doc)
 
-    structure = build_tree(doc, doc_id)
+    structure = build_tree(doc, doc_id, settings.assets_dir)
     total, refs = count_nodes(structure)
 
     out = {
@@ -342,7 +339,7 @@ def process_one(doc_id: str, marker_path: Path) -> dict:
         "source_marker_sha256": marker_sha,
         "structure": structure,
     }
-    out_path = config.SECTIONS_DIR / f"{doc_id}.json"
+    out_path = settings.sections_dir / f"{doc_id}.json"
     tmp = out_path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, out_path)
@@ -351,8 +348,8 @@ def process_one(doc_id: str, marker_path: Path) -> dict:
             "page_count": data.get("page_count"), "ok": True}
 
 
-def already_done(doc_id: str, marker_path: Path) -> bool:
-    out_path = config.SECTIONS_DIR / f"{doc_id}.json"
+def already_done(settings: Settings, doc_id: str, marker_path) -> bool:
+    out_path = settings.sections_dir / f"{doc_id}.json"
     if not out_path.exists():
         return False
     try:
@@ -362,16 +359,19 @@ def already_done(doc_id: str, marker_path: Path) -> bool:
     return existing.get("source_marker_sha256") == sha256_of(marker_path)
 
 
-def main() -> None:
+def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Marker JSON -> section-tree JSON.")
+    parser.add_argument("--corpus", metavar="PATH")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--only", metavar="DOC_ID")
     parser.add_argument("--limit", type=int)
-    args = parser.parse_args()
+    return parser
 
-    papers = config.load_papers()
-    marker_dir = config.marker_dir()
+
+def run(settings: Settings, args) -> None:
+    papers = settings.corpus.load_papers()
+    marker_dir = settings.corpus.marker_dir()
 
     todo = []
     no_marker = []
@@ -384,7 +384,7 @@ def main() -> None:
         if not marker_path.exists():
             no_marker.append(doc_id)
             continue
-        if not args.force and already_done(doc_id, marker_path):
+        if not args.force and already_done(settings, doc_id, marker_path):
             done += 1
             continue
         todo.append((doc_id, marker_path))
@@ -405,7 +405,7 @@ def main() -> None:
     results = []
     for doc_id, marker_path in tqdm(todo, unit="paper", desc="Building sections"):
         try:
-            results.append(process_one(doc_id, marker_path))
+            results.append(process_one(settings, doc_id, marker_path))
         except Exception as e:
             tqdm.write(f"  FAILED {doc_id}: {type(e).__name__}: {e}")
             results.append({"doc_id": doc_id, "ok": False, "error": str(e)})
@@ -433,6 +433,12 @@ def main() -> None:
             print(f"  {d}: {pc} pages")
     for r in failed:
         print(f"  FAILED {r['doc_id']}: {r.get('error')}")
+
+
+def main(argv=None) -> None:
+    args = build_arg_parser().parse_args(argv)
+    settings = load_settings(args.corpus, create_dirs=True)
+    run(settings, args)
 
 
 if __name__ == "__main__":

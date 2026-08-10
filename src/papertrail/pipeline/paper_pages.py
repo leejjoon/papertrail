@@ -7,13 +7,13 @@ two contracts via generate-and-retry: all required headings present, and every
 [n] marker has a matching, real citation. Deterministic parts (frontmatter,
 related-papers scoring, ## Links footer) are templated, never LLM-authored.
 
-Output: kb/wiki/papers/<doc_id>.md + kb/wiki/papers/<doc_id>.citations.json
+Output: <corpus>/wiki/papers/<doc_id>.md + <corpus>/wiki/papers/<doc_id>.citations.json
 
 Usage:
-    python3 kb/paper_pages.py --dry-run
-    python3 kb/paper_pages.py
-    python3 kb/paper_pages.py --only 2013Icar..225..432S --force
-    python3 kb/paper_pages.py --frontmatter-only
+    papertrail paper-pages --dry-run
+    papertrail paper-pages
+    papertrail paper-pages --only 2013Icar..225..432S --force
+    papertrail paper-pages --frontmatter-only
 """
 import argparse
 import json
@@ -23,17 +23,15 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from pathlib import Path
 
 import yaml
-from openai import OpenAI
 from tqdm import tqdm
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from kb import config
-
-sys.path.insert(0, str(Path(__file__).parent.parent / "webapp"))
-from app.answer import find_uncited_author_year_mentions
+from ..config import Settings, load_settings
+from ..core.citations import find_uncited_author_year_mentions
+from ..core.nodes import iter_leaves
+from ..textutils import slugify
+from .llm import get_client
 
 PROMPT_VERSION = "1"
 RETRIES = 3   # 4 total attempts — citation-heavy papers (100+ citations) need more
@@ -44,26 +42,14 @@ MAX_REFERENCE_NODES_SHOWN = 40   # cap bibliography entries in the citation pool
 TABLE_TEXT_PREVIEW_CHARS = 400    # raw <table> HTML can be huge; truncate in the pool
 MAX_RELATED = 5
 
-client = OpenAI(base_url=config.BASE_URL, api_key=config.API_KEY)
-
 
 # ---------------------------------------------------------------------------
 # Node pool — the closed set of (node_id, text) an LLM call may cite
 # ---------------------------------------------------------------------------
 
-def flatten_leaves(nodes: list[dict]) -> list[dict]:
-    out = []
-    for n in nodes:
-        if n["kind"] == "container":
-            out.extend(flatten_leaves(n["nodes"]))
-        else:
-            out.append(n)
-    return out
-
-
 def build_node_pool(section_tree: dict) -> tuple[str, set[str]]:
     """Returns (pool_text_for_prompt, set_of_valid_node_ids)."""
-    leaves = flatten_leaves(section_tree["structure"])
+    leaves = iter_leaves(section_tree["structure"])
     references = [n for n in leaves if n["block_type"] == "reference"]
     non_references = [n for n in leaves if n["block_type"] != "reference"]
     shown = non_references + references[:MAX_REFERENCE_NODES_SHOWN]
@@ -176,7 +162,7 @@ def headings_missing_citations(body: str, headings: list[str]) -> list[str]:
 
 def thin_signals(body: str, headings: list[str]) -> list[str]:
     """Non-fatal report combining zero-citation headings with the
-    author-year-mention heuristic (webapp/app/answer.py) — the same "names a
+    author-year-mention heuristic (core/citations.py) — the same "names a
     study but the [n] is missing/too far away" check the chat flow uses,
     applied here as a report only (NOT a hard validation failure): unlike
     interactive chat, a batch job re-running this on every heuristic false
@@ -188,8 +174,8 @@ def thin_signals(body: str, headings: list[str]) -> list[str]:
     return signals
 
 
-def generate_page(doc_id: str, title: str, metadata_yaml: str, headings: list[str],
-                   pool_text: str, valid_node_ids: set[str]) -> tuple[dict, list[str]]:
+def generate_page(client, model: str, doc_id: str, title: str, metadata_yaml: str,
+                   headings: list[str], pool_text: str, valid_node_ids: set[str]) -> tuple[dict, list[str]]:
     system, user = build_prompt(headings, title, metadata_yaml, pool_text)
     last_error = None
     for attempt in range(RETRIES + 1):
@@ -203,7 +189,7 @@ def generate_page(doc_id: str, title: str, metadata_yaml: str, headings: list[st
                                               # not just reasoning-token
                                               # exhaustion
         resp = client.chat.completions.create(
-            model=config.BULK_MODEL,
+            model=model,
             messages=[{"role": "system", "content": system},
                       {"role": "user", "content": user}],
             temperature=0.2,
@@ -247,7 +233,7 @@ def related_papers(doc_id: str, classification: dict, all_classifications: dict[
 
 
 def slug_for(kind: str, value: str) -> str:
-    return f"{kind}-{config.slugify(value)}"
+    return f"{kind}-{slugify(value)}"
 
 
 def links_footer(classification: dict, related: list[dict], paper: dict,
@@ -278,7 +264,7 @@ def links_footer(classification: dict, related: list[dict], paper: dict,
 
 
 def front_matter(paper: dict, classification: dict, related: list[dict],
-                  fulltext_source: str) -> str:
+                  fulltext_source: str, model: str) -> str:
     fm = {
         "doc_id": paper["doc_id"],
         "title": paper["title"],
@@ -292,7 +278,7 @@ def front_matter(paper: dict, classification: dict, related: list[dict],
         "role_of_wasp12b": classification.get("role_of_wasp12b"),
         "related_papers": related,
         "generator": {
-            "model": config.BULK_MODEL, "prompt_version": PROMPT_VERSION,
+            "model": model, "prompt_version": PROMPT_VERSION,
             "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         },
     }
@@ -303,8 +289,8 @@ def front_matter(paper: dict, classification: dict, related: list[dict],
 # Driver
 # ---------------------------------------------------------------------------
 
-def page_prompt_version(doc_id: str) -> str | None:
-    path = config.WIKI_PAPERS_DIR / f"{doc_id}.md"
+def page_prompt_version(settings: Settings, doc_id: str) -> str | None:
+    path = settings.wiki_dir / "papers" / f"{doc_id}.md"
     if not path.exists():
         return None
     text = path.read_text(encoding="utf-8")
@@ -312,28 +298,28 @@ def page_prompt_version(doc_id: str) -> str | None:
     return m.group(1).strip("'\"") if m else None
 
 
-def write_page(doc_id: str, paper: dict, classification: dict, page: dict,
-                related: list[dict], fulltext_source: str, all_papers_by_id: dict) -> None:
-    fm = front_matter(paper, classification, related, fulltext_source)
+def write_page(settings: Settings, doc_id: str, paper: dict, classification: dict, page: dict,
+                related: list[dict], fulltext_source: str, all_papers_by_id: dict, model: str) -> None:
+    fm = front_matter(paper, classification, related, fulltext_source, model)
     footer = links_footer(classification, related, paper, all_papers_by_id,
                            paper.get("extra", {}).get("doi"))
     content = f"---\n{fm}---\n\n# {paper['title']}\n\n{page['body_markdown']}\n\n{footer}\n"
-    out_path = config.WIKI_PAPERS_DIR / f"{doc_id}.md"
+    out_path = settings.wiki_dir / "papers" / f"{doc_id}.md"
     tmp = out_path.with_suffix(".md.tmp")
     tmp.write_text(content, encoding="utf-8")
     os.replace(tmp, out_path)
 
-    citations_path = config.WIKI_PAPERS_DIR / f"{doc_id}.citations.json"
+    citations_path = settings.wiki_dir / "papers" / f"{doc_id}.citations.json"
     tmp2 = citations_path.with_suffix(".citations.json.tmp")
     tmp2.write_text(json.dumps({"doc_id": doc_id, "citations": page["citations"]},
                                 ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(tmp2, citations_path)
 
 
-def process_paper(doc_id: str, paper: dict, classification: dict,
+def process_paper(settings: Settings, client, doc_id: str, paper: dict, classification: dict,
                    all_classifications: dict, headings: list[str],
                    papers_by_id: dict) -> tuple[str, str | None, list[str]]:
-    section_tree = json.loads((config.SECTIONS_DIR / f"{doc_id}.json").read_text(encoding="utf-8"))
+    section_tree = json.loads((settings.sections_dir / f"{doc_id}.json").read_text(encoding="utf-8"))
     pool_text, valid_node_ids = build_node_pool(section_tree)
     metadata_yaml = yaml.safe_dump({
         "title": paper["title"], "year": paper.get("year"), "journal": paper.get("journal"),
@@ -343,19 +329,21 @@ def process_paper(doc_id: str, paper: dict, classification: dict,
     }, sort_keys=False)
 
     try:
-        page, thin_headings = generate_page(doc_id, paper["title"], metadata_yaml,
-                                             headings, pool_text, valid_node_ids)
+        page, thin_headings = generate_page(client, settings.bulk_model, doc_id, paper["title"],
+                                             metadata_yaml, headings, pool_text, valid_node_ids)
     except Exception as e:
         return doc_id, str(e), []
 
     related = related_papers(doc_id, classification, all_classifications)
     fulltext_source = paper.get("fulltext_source", "publisher_pdf")
-    write_page(doc_id, paper, classification, page, related, fulltext_source, papers_by_id)
+    write_page(settings, doc_id, paper, classification, page, related, fulltext_source,
+               papers_by_id, settings.bulk_model)
     return doc_id, None, thin_headings
 
 
-def main() -> None:
+def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate cited wiki paper pages.")
+    parser.add_argument("--corpus", metavar="PATH")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--only", metavar="DOC_ID")
@@ -363,15 +351,16 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=5)
     parser.add_argument("--frontmatter-only", action="store_true")
     parser.add_argument("--regenerate-if-prompt-changed", action="store_true")
-    args = parser.parse_args()
+    return parser
 
-    if not config.API_KEY:
+
+def run(settings: Settings, args) -> None:
+    if not settings.api_key:
         sys.exit("API_KEY not found in .env")
 
-    cfg = config.load_corpus_config()
-    headings = cfg["wiki_headings"]
+    headings = settings.corpus.raw["wiki_headings"]
 
-    papers_by_id = {p["doc_id"]: p for p in config.load_papers()}
+    papers_by_id = {p["doc_id"]: p for p in settings.corpus.load_papers()}
     for doc_id, p in papers_by_id.items():
         p["fulltext_source"] = "publisher_pdf"
     # honor the one known arXiv-preprint substitution (see docs/spec/00_overview.md)
@@ -379,10 +368,10 @@ def main() -> None:
         papers_by_id["2010RPPh...73a6901B"]["fulltext_source"] = "arxiv_preprint"
 
     all_classifications = {}
-    for f in config.CLASSIFICATION_DIR.glob("*.yaml"):
+    for f in settings.classification_dir.glob("*.yaml"):
         all_classifications[f.stem] = yaml.safe_load(f.read_text(encoding="utf-8"))
 
-    section_files = sorted(config.SECTIONS_DIR.glob("*.json"))
+    section_files = sorted(settings.sections_dir.glob("*.json"))
     todo = []
     done = 0
     for f in section_files:
@@ -392,7 +381,7 @@ def main() -> None:
         if doc_id not in all_classifications:
             continue  # Stage B hasn't classified this one yet
         if not args.force:
-            existing_version = page_prompt_version(doc_id)
+            existing_version = page_prompt_version(settings, doc_id)
             if existing_version == PROMPT_VERSION:
                 done += 1
                 continue
@@ -412,11 +401,12 @@ def main() -> None:
     if not todo:
         return
 
+    client = get_client(settings)
     failed = []
     thin_report = {}
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = {
-            executor.submit(process_paper, doc_id, papers_by_id[doc_id],
+            executor.submit(process_paper, settings, client, doc_id, papers_by_id[doc_id],
                              all_classifications[doc_id], all_classifications,
                              headings, papers_by_id): doc_id
             for doc_id in todo
@@ -440,6 +430,12 @@ def main() -> None:
               f"false-positive rate on long, correctly-cited sentences — spot-check both):")
         for d, signals_list in thin_report.items():
             print(f"  {d}: {', '.join(signals_list)}")
+
+
+def main(argv=None) -> None:
+    args = build_arg_parser().parse_args(argv)
+    settings = load_settings(args.corpus, create_dirs=True)
+    run(settings, args)
 
 
 if __name__ == "__main__":

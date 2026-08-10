@@ -10,13 +10,13 @@ citation, so "click a citation, see the original text" holds for topic pages
 exactly as it does for chat/paper pages. Programmatic year pages stay uncited
 and byte-stable (no timestamp) across reruns.
 
-Output: kb/wiki/topics/<kind>-<slug>.md + .citations.json, kb/wiki/index.md
+Output: <corpus>/wiki/topics/<kind>-<slug>.md + .citations.json, <corpus>/wiki/index.md
 
 Usage:
-    python3 kb/topic_pages.py --dry-run
-    python3 kb/topic_pages.py
-    python3 kb/topic_pages.py --force
-    python3 kb/topic_pages.py --lint
+    papertrail topic-pages --dry-run
+    papertrail topic-pages
+    papertrail topic-pages --force
+    papertrail topic-pages --lint
 """
 import argparse
 import json
@@ -24,40 +24,39 @@ import os
 import re
 import sys
 import time
-from collections import Counter, defaultdict
+from collections import defaultdict
 from datetime import datetime, timezone
-from pathlib import Path
 
 import yaml
-from openai import OpenAI
 from tqdm import tqdm
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from kb import config, paper_pages
+from ..config import Settings, load_settings
+from ..core.citations import find_uncited_author_year_mentions
+from ..core.nodes import iter_leaves
+from ..textutils import slugify
+from .llm import get_client
 
 RETRIES = 3   # 4 total attempts — same lesson as kb/paper_pages.py: large
               # topic groups (dozens of member papers, wide citation pools)
               # need more headroom than a small default budget provides
-
-client = OpenAI(base_url=config.BASE_URL, api_key=config.API_KEY)
 
 
 # ---------------------------------------------------------------------------
 # Load everything Stage C/B produced
 # ---------------------------------------------------------------------------
 
-def load_all_classifications() -> dict[str, dict]:
+def load_all_classifications(settings: Settings) -> dict[str, dict]:
     out = {}
-    for f in config.CLASSIFICATION_DIR.glob("*.yaml"):
+    for f in settings.classification_dir.glob("*.yaml"):
         out[f.stem] = yaml.safe_load(f.read_text(encoding="utf-8"))
     return out
 
 
-def load_wiki_page(doc_id: str) -> tuple[str, dict] | None:
+def load_wiki_page(settings: Settings, doc_id: str) -> tuple[str, dict] | None:
     """Returns (body_markdown_without_frontmatter, citations_dict) or None if
     no paper page exists yet for this doc_id (Stage C not run / no fulltext)."""
-    md_path = config.WIKI_PAPERS_DIR / f"{doc_id}.md"
-    cit_path = config.WIKI_PAPERS_DIR / f"{doc_id}.citations.json"
+    md_path = settings.wiki_dir / "papers" / f"{doc_id}.md"
+    cit_path = settings.wiki_dir / "papers" / f"{doc_id}.citations.json"
     if not md_path.exists() or not cit_path.exists():
         return None
     text = md_path.read_text(encoding="utf-8")
@@ -78,11 +77,11 @@ def extract_section(body: str, heading: str) -> str:
     return m.group(1).strip() if m else ""
 
 
-def paper_digest(doc_id: str, title: str, year: int | None) -> tuple[str, set[str]]:
+def paper_digest(settings: Settings, doc_id: str, title: str, year: int | None) -> tuple[str, set[str]]:
     """Returns (digest_text_with_local_markers_intact, set_of_node_ids_it_cites).
     Digest text keeps its original [n] markers as-is — the caller resolves them
     against this doc's own citation map when building the shared pool."""
-    loaded = load_wiki_page(doc_id)
+    loaded = load_wiki_page(settings, doc_id)
     if loaded is None:
         return "", set()
     body, cit_by_id = loaded
@@ -101,14 +100,14 @@ def paper_digest(doc_id: str, title: str, year: int | None) -> tuple[str, set[st
     return f"{header}\n" + "\n".join(pieces), cited_node_ids
 
 
-def node_text_for(doc_id: str, node_id: str, _cache: dict = {}) -> str | None:
+def node_text_for(settings: Settings, doc_id: str, node_id: str, _cache: dict = {}) -> str | None:
     if doc_id not in _cache:
-        path = config.SECTIONS_DIR / f"{doc_id}.json"
+        path = settings.sections_dir / f"{doc_id}.json"
         _cache[doc_id] = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
     tree = _cache[doc_id]
     if tree is None:
         return None
-    for n in paper_pages.flatten_leaves(tree["structure"]):
+    for n in iter_leaves(tree["structure"]):
         if n["node_id"] == node_id:
             return n["text"]
     return None
@@ -187,17 +186,17 @@ def validate_topic(result: dict, valid_pairs: set[tuple[str, str]]) -> str | Non
     return None
 
 
-def synthesize_topic(kind: str, name: str, member_docs: list[dict]) -> dict:
+def synthesize_topic(settings: Settings, client, kind: str, name: str, member_docs: list[dict]) -> dict:
     digests = []
     pool_lines = []
     valid_pairs = set()
     for doc_id, title, year in [(d["doc_id"], d["title"], d.get("year")) for d in member_docs]:
-        digest, cited_node_ids = paper_digest(doc_id, title, year)
+        digest, cited_node_ids = paper_digest(settings, doc_id, title, year)
         if not digest:
             continue
         digests.append(digest)
         for node_id in sorted(cited_node_ids):
-            text = node_text_for(doc_id, node_id)
+            text = node_text_for(settings, doc_id, node_id)
             if text is None:
                 continue
             pool_lines.append(f"[{doc_id} / {node_id}] {text[:300]}")
@@ -211,7 +210,7 @@ def synthesize_topic(kind: str, name: str, member_docs: list[dict]) -> dict:
     for attempt in range(RETRIES + 1):
         max_tokens = 8000 * (2 ** attempt)  # 8000, 16000, 32000, 64000
         resp = client.chat.completions.create(
-            model=config.SYNTH_MODEL,
+            model=settings.synth_model,
             messages=[{"role": "system", "content": system},
                       {"role": "user", "content": user}],
             max_tokens=max_tokens,
@@ -247,9 +246,9 @@ def member_table(member_docs: list[dict], papers_prefix: str = "../papers/") -> 
     return "\n".join(rows)
 
 
-def write_topic_page(kind: str, name: str, prose_or_none: str, member_docs: list[dict],
-                      model: str, citations: list[dict] | None = None) -> None:
-    slug = f"{kind}-{config.slugify(name)}"
+def write_topic_page(settings: Settings, kind: str, name: str, prose_or_none: str,
+                      member_docs: list[dict], model: str, citations: list[dict] | None = None) -> None:
+    slug = f"{kind}-{slugify(name)}"
     fm = {"title": f"{kind.title()}: {name}", "kind": kind, "paper_count": len(member_docs),
           "generator": {"model": model}}
     if model != "programmatic":
@@ -258,13 +257,13 @@ def write_topic_page(kind: str, name: str, prose_or_none: str, member_docs: list
     body = prose_or_none or f"{len(member_docs)} papers in this corpus fall under {kind} \"{name}\"."
     content = (f"---\n{fm_yaml}---\n\n# {kind.title()}: {name}\n\n{body}\n\n"
                f"## Papers\n\n{member_table(member_docs)}\n\n[← KB index](../index.md)\n")
-    out_path = config.WIKI_TOPICS_DIR / f"{slug}.md"
+    out_path = settings.wiki_dir / "topics" / f"{slug}.md"
     tmp = out_path.with_suffix(".md.tmp")
     tmp.write_text(content, encoding="utf-8")
     os.replace(tmp, out_path)
 
     if citations is not None:
-        cit_path = config.WIKI_TOPICS_DIR / f"{slug}.citations.json"
+        cit_path = settings.wiki_dir / "topics" / f"{slug}.citations.json"
         tmp2 = cit_path.with_suffix(".citations.json.tmp")
         tmp2.write_text(json.dumps({"slug": slug, "citations": citations},
                                     ensure_ascii=False, indent=2), encoding="utf-8")
@@ -283,9 +282,9 @@ def group_papers(all_docs: list[dict], facet: str) -> dict[str, list[dict]]:
     return groups
 
 
-def build_index(all_docs: list[dict], theme_groups: dict, method_groups: dict,
-                 facility_groups: dict, year_groups: dict, force: bool) -> None:
-    out_path = config.WIKI_DIR / "index.md"
+def build_index(settings: Settings, client, all_docs: list[dict], theme_groups: dict,
+                 method_groups: dict, facility_groups: dict, year_groups: dict, force: bool) -> None:
+    out_path = settings.wiki_dir / "index.md"
     if out_path.exists() and not force:
         return
 
@@ -301,11 +300,11 @@ def build_index(all_docs: list[dict], theme_groups: dict, method_groups: dict,
     digests, pool_lines, valid_pairs = [], [], set()
     for theme, docs in list(theme_groups.items())[:10]:
         rep = sorted(docs, key=lambda d: d.get("year") or 0)[-1]
-        digest, cited_node_ids = paper_digest(rep["doc_id"], rep["title"], rep.get("year"))
+        digest, cited_node_ids = paper_digest(settings, rep["doc_id"], rep["title"], rep.get("year"))
         if digest:
             digests.append(digest)
             for node_id in sorted(cited_node_ids):
-                text = node_text_for(rep["doc_id"], node_id)
+                text = node_text_for(settings, rep["doc_id"], node_id)
                 if text is not None:
                     pool_lines.append(f"[{rep['doc_id']} / {node_id}] {text[:300]}")
                     valid_pairs.add((rep["doc_id"], node_id))
@@ -330,7 +329,7 @@ def build_index(all_docs: list[dict], theme_groups: dict, method_groups: dict,
         last_error = None
         for attempt in range(RETRIES + 1):
             resp = client.chat.completions.create(
-                model=config.SYNTH_MODEL,
+                model=settings.synth_model,
                 messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
                 max_tokens=3000 * (2 ** attempt),
             )
@@ -348,13 +347,13 @@ def build_index(all_docs: list[dict], theme_groups: dict, method_groups: dict,
         lines.append(prose + "\n")
     lines.append("## By theme")
     for k, n in stats["by_theme"].items():
-        lines.append(f"- [{k}](topics/{config.slugify('theme-' + k)}.md) ({n} papers)")
+        lines.append(f"- [{k}](topics/{slugify('theme-' + k)}.md) ({n} papers)")
     lines.append("\n## By method")
     for k, n in stats["by_method"].items():
-        lines.append(f"- [{k}](topics/{config.slugify('method-' + k)}.md) ({n} papers)")
+        lines.append(f"- [{k}](topics/{slugify('method-' + k)}.md) ({n} papers)")
     lines.append("\n## By facility")
     for k, n in stats["by_facility"].items():
-        lines.append(f"- [{k}](topics/{config.slugify('facility-' + k)}.md) ({n} papers)")
+        lines.append(f"- [{k}](topics/{slugify('facility-' + k)}.md) ({n} papers)")
     lines.append("\n## By year")
     for y in sorted(stats["by_year"]):
         lines.append(f"- [{y}](topics/year-{y}.md) ({stats['by_year'][y]} papers)")
@@ -365,7 +364,7 @@ def build_index(all_docs: list[dict], theme_groups: dict, method_groups: dict,
     tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
     os.replace(tmp, out_path)
     if citations is not None:
-        cit_path = config.WIKI_DIR / "index.citations.json"
+        cit_path = settings.wiki_dir / "index.citations.json"
         cit_path.write_text(json.dumps({"citations": citations}, ensure_ascii=False, indent=2),
                              encoding="utf-8")
 
@@ -377,9 +376,9 @@ def build_index(all_docs: list[dict], theme_groups: dict, method_groups: dict,
 LINK_RE = re.compile(r"\[[^\]]*\]\((?!https?://|mailto:)([^)#]+)\)")
 
 
-def lint() -> bool:
+def lint(settings: Settings) -> bool:
     ok = True
-    for md_file in config.WIKI_DIR.rglob("*.md"):
+    for md_file in settings.wiki_dir.rglob("*.md"):
         text = md_file.read_text(encoding="utf-8")
         for link in LINK_RE.findall(text):
             target = (md_file.parent / link).resolve()
@@ -393,21 +392,24 @@ def lint() -> bool:
 # Driver
 # ---------------------------------------------------------------------------
 
-def main() -> None:
+def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate cross-paper topic/index pages.")
+    parser.add_argument("--corpus", metavar="PATH")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--lint", action="store_true")
-    args = parser.parse_args()
+    return parser
 
+
+def run(settings: Settings, args) -> None:
     if args.lint:
-        sys.exit(0 if lint() else 1)
+        sys.exit(0 if lint(settings) else 1)
 
-    if not config.API_KEY:
+    if not settings.api_key:
         sys.exit("API_KEY not found in .env")
 
-    papers_by_id = {p["doc_id"]: p for p in config.load_papers()}
-    classifications = load_all_classifications()
+    papers_by_id = {p["doc_id"]: p for p in settings.corpus.load_papers()}
+    classifications = load_all_classifications(settings)
 
     all_docs = []
     for doc_id, cls in classifications.items():
@@ -431,8 +433,8 @@ def main() -> None:
     todo = []
     for kind, groups in (("theme", theme_groups), ("method", method_groups), ("facility", facility_groups)):
         for name, members in groups.items():
-            slug = f"{kind}-{config.slugify(name)}"
-            out_path = config.WIKI_TOPICS_DIR / f"{slug}.md"
+            slug = f"{kind}-{slugify(name)}"
+            out_path = settings.wiki_dir / "topics" / f"{slug}.md"
             if out_path.exists() and not args.force:
                 continue
             todo.append((kind, name, members))
@@ -441,29 +443,32 @@ def main() -> None:
           f"to generate: {len(todo)} | year pages: {len(year_groups)} (always regenerated)")
     if args.dry_run:
         for kind, name, members in todo:
-            print(f"  [dry-run] {kind}-{config.slugify(name)} ({len(members)} papers)")
+            print(f"  [dry-run] {kind}-{slugify(name)} ({len(members)} papers)")
         print("  [dry-run] index.md")
         return
 
+    client = get_client(settings)
     failed = []
     thin_report = {}
     for kind, name, members in tqdm(todo, unit="topic", desc="Synthesizing topics"):
         try:
-            result = synthesize_topic(kind, name, members)
+            result = synthesize_topic(settings, client, kind, name, members)
         except Exception as e:
-            tqdm.write(f"  FAILED {kind}-{config.slugify(name)}: {e}")
+            tqdm.write(f"  FAILED {kind}-{slugify(name)}: {e}")
             failed.append(f"{kind}-{name}")
             continue
-        write_topic_page(kind, name, result["prose"], members, config.SYNTH_MODEL, result["citations"])
-        mentions = paper_pages.find_uncited_author_year_mentions(result["prose"])
+        write_topic_page(settings, kind, name, result["prose"], members, settings.synth_model,
+                          result["citations"])
+        mentions = find_uncited_author_year_mentions(result["prose"])
         if mentions:  # non-fatal report only — see kb/paper_pages.py's thin_signals docstring
-            thin_report[f"{kind}-{config.slugify(name)}"] = mentions
+            thin_report[f"{kind}-{slugify(name)}"] = mentions
 
     # Year pages — always regenerated, programmatic, uncited, byte-stable.
     for year, members in year_groups.items():
-        write_topic_page("year", str(year), None, members, "programmatic")
+        write_topic_page(settings, "year", str(year), None, members, "programmatic")
 
-    build_index(all_docs, theme_groups, method_groups, facility_groups, year_groups, args.force)
+    build_index(settings, client, all_docs, theme_groups, method_groups, facility_groups,
+                year_groups, args.force)
 
     print(f"\nGenerated: {len(todo) - len(failed)} | failed: {len(failed)}")
     for f in failed:
@@ -474,7 +479,13 @@ def main() -> None:
             print(f"  {slug}: {mentions}")
 
     print("\nRunning lint...")
-    sys.exit(0 if lint() else 1)
+    sys.exit(0 if lint(settings) else 1)
+
+
+def main(argv=None) -> None:
+    args = build_arg_parser().parse_args(argv)
+    settings = load_settings(args.corpus, create_dirs=True)
+    run(settings, args)
 
 
 if __name__ == "__main__":

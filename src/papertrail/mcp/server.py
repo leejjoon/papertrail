@@ -407,7 +407,7 @@ def build_server(settings: Settings) -> MCPServer:
     return mcp
 
 
-def main() -> None:
+def main(argv=None) -> None:
     settings = load_settings()
     mcp = build_server(settings)
     transport = os.getenv("MCP_TRANSPORT", "stdio")

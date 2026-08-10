@@ -22,7 +22,9 @@ Two behavior fixes over the code this replaces:
 """
 from __future__ import annotations
 
+import importlib
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -37,17 +39,52 @@ class CorpusConfigError(Exception):
 @dataclass(frozen=True)
 class Corpus:
     """Parsed corpus.yaml. Minimal for now — just enough for path
-    resolution (Step 4). Taxonomy/identity/prompt/branding semantics land
-    as typed fields in the papertrail migration's Step 9 (the four
-    genericity seams); until then, `raw` carries the full parsed YAML so
-    nothing already written against corpus.yaml's existing keys
-    (research_theme, wiki_headings, ...) is blocked on this refactor."""
+    resolution (Step 4) and pipeline-stage needs (Step 6). Taxonomy/
+    identity/prompt/branding semantics land as typed fields in the
+    papertrail migration's Step 9 (the four genericity seams); until then,
+    `raw` carries the full parsed YAML so nothing already written against
+    corpus.yaml's existing keys (research_theme, wiki_headings, ...) is
+    blocked on this refactor."""
     root: Path
     raw: dict = field(default_factory=dict)
 
     @property
     def name(self) -> str:
         return (self.raw.get("corpus") or {}).get("name") or self.root.name
+
+    def marker_dir(self) -> Path:
+        raw = self.raw["source"]["marker_dir"]
+        p = Path(raw)
+        return p if p.is_absolute() else (self.root / p).resolve()
+
+    def adapter_module(self):
+        """Dynamically import corpus.yaml's metadata_adapter module
+        ("module.path:func") and return the module object — kb/build_index.py
+        (Stage E) needs the module itself (for load_all_including_stubs(), an
+        undeclared second entry point corpus.yaml doesn't mention — the
+        papertrail migration's Step 9 turns this into a proper declared
+        entry point), while load_papers() below only needs the one function.
+
+        Mirrors kb/config.py's load_papers(), including its sys.path
+        assumption: metadata_adapter's dotted path is resolved from the
+        corpus root's PARENT directory (true for wasp12b's current
+        `kb.adapters.wasp12b:load` value, which assumes the repo root — kb/'s
+        parent — is on sys.path, exactly as kb/config.py itself arranged).
+        Once a corpus is fully self-contained (Step 8: corpus.yaml +
+        adapter.py + data/ under one directory), metadata_adapter can
+        instead be a corpus-relative "./adapter.py:func" path — not needed
+        until then."""
+        mod_path, _ = self.raw["source"]["metadata_adapter"].split(":")
+        parent = str(self.root.parent)
+        if parent not in sys.path:
+            sys.path.insert(0, parent)
+        return importlib.import_module(mod_path)
+
+    def load_papers(self) -> list[dict]:
+        """One dict per fetchable/known document, each with at least
+        doc_id/title/authors/year/journal/extra (docs/spec/01_data_contracts.md)."""
+        _, func_name = self.raw["source"]["metadata_adapter"].split(":")
+        return getattr(self.adapter_module(), func_name)()
 
 
 @dataclass(frozen=True)

@@ -6,8 +6,8 @@ Full drop-and-rebuild of the content tables (docs, nodes, chunks_fts) every run
 answers/conversations/messages are created once and NEVER dropped by a rebuild,
 so re-running the pipeline after adding papers doesn't destroy chat history.
 
-Nodes are indexed directly from kb/data/sections/*.json — one row per leaf AND
-container node — with no resplitting step (unlike kasi's kb, nodes here are
+Nodes are indexed directly from <corpus>/data/sections/*.json — one row per leaf
+AND container node — with no resplitting step (unlike kasi's kb, nodes here are
 already paragraph/table/figure-sized, so each is already a natural FTS chunk).
 Wiki page bodies (paper/topic pages) are NOT separately indexed: their prose
 already exists as the primary-source node(s) it cites elsewhere in `nodes`, and
@@ -18,19 +18,16 @@ The 20 stub docs (no fulltext — see docs/spec/00_overview.md) get one node row
 each of block_type='stub' so they're findable by title/author search.
 
 Usage:
-    python3 kb/build_index.py
+    papertrail index
 """
+import argparse
 import json
 import sqlite3
-import sys
-from pathlib import Path
 
 import yaml
 from tqdm import tqdm
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from kb import config
-from kb.adapters import wasp12b as adapter
+from ..config import Settings, load_settings
 
 SCHEMA_CONTENT = """
 CREATE TABLE docs (
@@ -87,15 +84,15 @@ CONTENT_TABLES = ["chunks_fts", "chunks_fts_data", "chunks_fts_idx",
                    "chunks_fts_docsize", "chunks_fts_config", "nodes", "docs"]
 
 
-def load_classification(doc_id: str) -> dict:
-    path = config.CLASSIFICATION_DIR / f"{doc_id}.yaml"
+def load_classification(settings: Settings, doc_id: str) -> dict:
+    path = settings.classification_dir / f"{doc_id}.yaml"
     if not path.exists():
         return {}
     return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
 
-def insert_full_doc(conn: sqlite3.Connection, doc_id: str, paper: dict, cls: dict,
-                     fulltext_source: str) -> None:
+def insert_full_doc(conn: sqlite3.Connection, settings: Settings, doc_id: str, paper: dict,
+                     cls: dict, fulltext_source: str) -> None:
     conn.execute(
         "INSERT INTO docs (doc_id, title, year, journal, authors_json, "
         "fulltext_source, has_fulltext, research_theme_json, method_json, "
@@ -107,7 +104,7 @@ def insert_full_doc(conn: sqlite3.Connection, doc_id: str, paper: dict, cls: dic
          json.dumps(cls.get("facility") or []),
          cls.get("role_of_wasp12b")))
 
-    section_tree = json.loads((config.SECTIONS_DIR / f"{doc_id}.json").read_text(encoding="utf-8"))
+    section_tree = json.loads((settings.sections_dir / f"{doc_id}.json").read_text(encoding="utf-8"))
 
     def walk(nodes: list[dict], parent_title: str | None):
         for n in nodes:
@@ -143,29 +140,36 @@ def insert_stub_doc(conn: sqlite3.Connection, entry: dict) -> None:
         (doc_id, "0001", "leaf", "stub", None, None, stub_text))
 
 
-def main() -> None:
-    config.KB_SQLITE.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(config.KB_SQLITE)
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Build kb.sqlite from pipeline artifacts.")
+    parser.add_argument("--corpus", metavar="PATH")
+    return parser
+
+
+def run(settings: Settings) -> None:
+    settings.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(settings.sqlite_path)
     conn.executescript(SCHEMA_PERSISTENT)  # never dropped
 
     for table in CONTENT_TABLES:
         conn.execute(f"DROP TABLE IF EXISTS {table}")
     conn.executescript(SCHEMA_CONTENT)
 
-    papers_by_id = {p["doc_id"]: p for p in config.load_papers()}
-    section_files = {f.stem for f in config.SECTIONS_DIR.glob("*.json")}
+    papers_by_id = {p["doc_id"]: p for p in settings.corpus.load_papers()}
+    section_files = {f.stem for f in settings.sections_dir.glob("*.json")}
 
     full_count = 0
     for doc_id in tqdm(sorted(section_files), unit="paper", desc="Indexing full-text papers"):
         paper = papers_by_id.get(doc_id)
         if paper is None:
             continue
-        cls = load_classification(doc_id)
+        cls = load_classification(settings, doc_id)
         fulltext_source = "arxiv_preprint" if doc_id == "2010RPPh...73a6901B" else "publisher_pdf"
-        insert_full_doc(conn, doc_id, paper, cls, fulltext_source)
+        insert_full_doc(conn, settings, doc_id, paper, cls, fulltext_source)
         full_count += 1
 
     stub_count = 0
+    adapter = settings.corpus.adapter_module()
     for entry in adapter.load_all_including_stubs():
         if entry.get("has_fulltext"):
             continue  # already indexed above, or will be once Stages A-D catch up
@@ -182,6 +186,12 @@ def main() -> None:
     print(f"\nIndexed: {full_count} full-text papers + {stub_count} stub docs "
           f"= {n_docs} docs, {n_nodes} nodes")
     conn.close()
+
+
+def main(argv=None) -> None:
+    args = build_arg_parser().parse_args(argv)
+    settings = load_settings(args.corpus, create_dirs=True)
+    run(settings)
 
 
 if __name__ == "__main__":

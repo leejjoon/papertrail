@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""Stage B — LLM classification sidecar per taxonomy in kb/corpus.yaml.
+"""Stage B — LLM classification sidecar per corpus.yaml's taxonomy.
 
 One BULK_MODEL call per paper: title + truncated body text -> facet tags from a
-closed vocabulary (research_theme, method, facility, role_of_wasp12b). Output:
-kb/data/classification/<doc_id>.yaml. Coarse tagging only (not a citation-bearing
-claim), so truncated context is fine here unlike Stage C/D.
+closed vocabulary (research_theme, method, facility, role_of_wasp12b for
+wasp12b — the taxonomy is corpus.yaml-defined, see papertrail migration Step 9
+for making the prompt itself taxonomy-driven rather than hardcoding these
+facet names). Output: <corpus>/data/classification/<doc_id>.yaml. Coarse
+tagging only (not a citation-bearing claim), so truncated context is fine
+here unlike Stage C/D.
 
 Usage:
-    python3 kb/classify.py --dry-run
-    python3 kb/classify.py
-    python3 kb/classify.py --only 2013Icar..225..432S --force
+    papertrail classify --dry-run
+    papertrail classify
+    papertrail classify --only 2013Icar..225..432S --force
 """
 import argparse
 import json
@@ -19,20 +22,16 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from pathlib import Path
 
 import yaml
-from openai import OpenAI
 from tqdm import tqdm
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from kb import config
+from ..config import Settings, load_settings
+from .llm import get_client
 
 PROMPT_VERSION = "1"
 MAX_BODY_WORDS = 4000
 RETRIES = 2
-
-client = OpenAI(base_url=config.BASE_URL, api_key=config.API_KEY)
 
 
 def flatten_text(nodes: list[dict]) -> str:
@@ -109,7 +108,7 @@ def validate(result: dict, taxonomy: dict) -> str | None:
     return None
 
 
-def classify_one(doc_id: str, title: str, body: str, taxonomy: dict) -> dict:
+def classify_one(client, model: str, doc_id: str, title: str, body: str, taxonomy: dict) -> dict:
     system, user = build_prompt(taxonomy, title, body)
     last_error = None
     for attempt in range(RETRIES + 1):
@@ -123,7 +122,7 @@ def classify_one(doc_id: str, title: str, body: str, taxonomy: dict) -> dict:
         # that resolve fine at 4000.
         max_tokens = 4000 * (2 ** attempt)  # 4000, 8000, 16000
         resp = client.chat.completions.create(
-            model=config.BULK_MODEL,
+            model=model,
             messages=[{"role": "system", "content": system},
                       {"role": "user", "content": user}],
             temperature=0.1,
@@ -143,30 +142,31 @@ def classify_one(doc_id: str, title: str, body: str, taxonomy: dict) -> dict:
     raise ValueError(f"classification failed after {RETRIES + 1} attempts: {last_error}")
 
 
-def process_paper(doc_id: str, papers_by_id: dict, taxonomy: dict) -> tuple[str, str | None]:
+def process_paper(settings: Settings, client, doc_id: str, papers_by_id: dict,
+                   taxonomy: dict) -> tuple[str, str | None]:
     """Returns (doc_id, error_or_None). Runs in a worker thread."""
-    section_tree = json.loads((config.SECTIONS_DIR / f"{doc_id}.json").read_text(encoding="utf-8"))
+    section_tree = json.loads((settings.sections_dir / f"{doc_id}.json").read_text(encoding="utf-8"))
     title = papers_by_id.get(doc_id, {}).get("title", "")
     body = truncated_body(section_tree)
     try:
-        result = classify_one(doc_id, title, body, taxonomy)
+        result = classify_one(client, settings.bulk_model, doc_id, title, body, taxonomy)
     except Exception as e:
         return doc_id, str(e)
 
     result["generator"] = {
-        "model": config.BULK_MODEL, "prompt_version": PROMPT_VERSION,
+        "model": settings.bulk_model, "prompt_version": PROMPT_VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
     result["doc_id"] = doc_id
-    out_path = config.CLASSIFICATION_DIR / f"{doc_id}.yaml"
+    out_path = settings.classification_dir / f"{doc_id}.yaml"
     tmp = out_path.with_suffix(".yaml.tmp")
     tmp.write_text(yaml.safe_dump(result, sort_keys=False, allow_unicode=True), encoding="utf-8")
     os.replace(tmp, out_path)
     return doc_id, None
 
 
-def already_done(doc_id: str) -> bool:
-    out_path = config.CLASSIFICATION_DIR / f"{doc_id}.yaml"
+def already_done(settings: Settings, doc_id: str) -> bool:
+    out_path = settings.classification_dir / f"{doc_id}.yaml"
     if not out_path.exists():
         return False
     try:
@@ -176,29 +176,31 @@ def already_done(doc_id: str) -> bool:
     return (existing or {}).get("generator", {}).get("prompt_version") == PROMPT_VERSION
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Classify papers per kb/corpus.yaml's taxonomy.")
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Classify papers per corpus.yaml's taxonomy.")
+    parser.add_argument("--corpus", metavar="PATH")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--only", metavar="DOC_ID")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--workers", type=int, default=8)
-    args = parser.parse_args()
+    return parser
 
-    if not config.API_KEY:
+
+def run(settings: Settings, args) -> None:
+    if not settings.api_key:
         sys.exit("API_KEY not found in .env")
 
-    cfg = config.load_corpus_config()
-    taxonomy = cfg["taxonomy"]
+    taxonomy = settings.corpus.raw["taxonomy"]
 
-    section_files = sorted(config.SECTIONS_DIR.glob("*.json"))
+    section_files = sorted(settings.sections_dir.glob("*.json"))
     todo = []
     done = 0
     for f in section_files:
         doc_id = f.stem
         if args.only and doc_id != args.only:
             continue
-        if not args.force and already_done(doc_id):
+        if not args.force and already_done(settings, doc_id):
             done += 1
             continue
         todo.append(doc_id)
@@ -217,11 +219,13 @@ def main() -> None:
     # doc_id -> title, via the metadata adapter (single pass, avoid a lookup miss
     # for the 2 papers with no PDF — those never reach this stage since there's
     # no section-tree file for them in the first place).
-    papers_by_id = {p["doc_id"]: p for p in config.load_papers()}
+    papers_by_id = {p["doc_id"]: p for p in settings.corpus.load_papers()}
+    client = get_client(settings)
 
     failed = []
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
-        futures = {executor.submit(process_paper, doc_id, papers_by_id, taxonomy): doc_id
+        futures = {executor.submit(process_paper, settings, client, doc_id, papers_by_id,
+                                   taxonomy): doc_id
                    for doc_id in todo}
         with tqdm(total=len(futures), unit="paper", desc="Classifying") as pbar:
             for future in as_completed(futures):
@@ -234,6 +238,12 @@ def main() -> None:
     print(f"\nClassified: {len(todo) - len(failed)} | failed: {len(failed)}")
     for d in failed:
         print(f"  FAILED {d}")
+
+
+def main(argv=None) -> None:
+    args = build_arg_parser().parse_args(argv)
+    settings = load_settings(args.corpus, create_dirs=True)
+    run(settings, args)
 
 
 if __name__ == "__main__":
