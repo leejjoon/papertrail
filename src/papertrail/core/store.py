@@ -11,6 +11,12 @@ beyond the file).
 A `Store` bound to one `Settings` (rather than free functions reading a
 module-global config) so a process can serve more than one corpus without
 cross-talk — mirrors CorpusRegistry's shape.
+
+Every connection runs `core.schema.ensure_persistent()` first (cheap,
+idempotent `CREATE TABLE IF NOT EXISTS`) — papertrail migration Step 7's
+fix for the web app previously having no way to bootstrap its own
+conversations/answers/messages tables on a corpus whose Stage E (which
+used to own 100% of this DDL) had never been run.
 """
 from __future__ import annotations
 
@@ -20,6 +26,7 @@ import uuid
 from datetime import datetime, timezone
 
 from ..config import Settings
+from . import schema
 
 
 def _now() -> str:
@@ -33,6 +40,7 @@ class Store:
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.settings.sqlite_path)
         conn.row_factory = sqlite3.Row
+        schema.ensure_persistent(conn)
         return conn
 
     # --- conversations ---------------------------------------------------

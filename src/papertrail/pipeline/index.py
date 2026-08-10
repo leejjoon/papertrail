@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Stage E — build kb.sqlite.
 
-Full drop-and-rebuild of the content tables (docs, nodes, chunks_fts) every run
-— no resume logic needed at this scale (kasi_papers_analysis's precedent).
-answers/conversations/messages are created once and NEVER dropped by a rebuild,
-so re-running the pipeline after adding papers doesn't destroy chat history.
+Full drop-and-rebuild of the content tables (docs, nodes, doc_facets,
+chunks_fts) every run — no resume logic needed at this scale
+(kasi_papers_analysis's precedent). answers/conversations/messages are
+created once (core.schema.ensure_persistent) and NEVER dropped by a
+rebuild, so re-running the pipeline after adding papers doesn't destroy
+chat history.
 
 Nodes are indexed directly from <corpus>/data/sections/*.json — one row per leaf
 AND container node — with no resplitting step (unlike kasi's kb, nodes here are
@@ -17,6 +19,14 @@ provenance. Wiki pages remain browsable independent of the FTS index.
 The 20 stub docs (no fulltext — see docs/spec/00_overview.md) get one node row
 each of block_type='stub' so they're findable by title/author search.
 
+Facet storage (papertrail migration Step 7): each doc's facet values go into
+`docs.facets_json` (one dict, `{facet: value_or_list}`) AND `doc_facets`
+(one row per (doc_id, facet, value) pair, including single-valued facets —
+see core/schema.py's docstring). The four facet names themselves
+(research_theme/method/facility/role_of_wasp12b) are still wasp12b-specific
+literals here — making that taxonomy-driven is Step 9's job (Seam 3
+remainder), not this one.
+
 Usage:
     papertrail index
 """
@@ -28,60 +38,9 @@ import yaml
 from tqdm import tqdm
 
 from ..config import Settings, load_settings
+from ..core import schema
 
-SCHEMA_CONTENT = """
-CREATE TABLE docs (
-    doc_id TEXT PRIMARY KEY,
-    title TEXT, year INTEGER, journal TEXT, authors_json TEXT,
-    fulltext_source TEXT,
-    has_fulltext INTEGER NOT NULL,
-    research_theme_json TEXT, method_json TEXT, facility_json TEXT,
-    role_of_wasp12b TEXT
-);
-
-CREATE TABLE nodes (
-    id INTEGER PRIMARY KEY,
-    doc_id TEXT NOT NULL REFERENCES docs(doc_id),
-    node_id TEXT NOT NULL,
-    kind TEXT NOT NULL,
-    block_type TEXT,
-    parent_title TEXT,
-    page INTEGER,
-    text TEXT NOT NULL,
-    UNIQUE (doc_id, node_id)
-);
-
-CREATE VIRTUAL TABLE chunks_fts USING fts5(
-    text, content='nodes', content_rowid='id', tokenize='porter unicode61'
-);
-"""
-
-SCHEMA_PERSISTENT = """
-CREATE TABLE IF NOT EXISTS conversations (
-    id INTEGER PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS answers (
-    id TEXT PRIMARY KEY,
-    kind TEXT NOT NULL,
-    conversation_id INTEGER REFERENCES conversations(id),
-    title TEXT,
-    payload_json TEXT NOT NULL,
-    created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS messages (
-    id INTEGER PRIMARY KEY,
-    conversation_id INTEGER NOT NULL REFERENCES conversations(id),
-    role TEXT NOT NULL,
-    text TEXT,
-    answer_id TEXT REFERENCES answers(id),
-    created_at TEXT NOT NULL
-);
-"""
-
-CONTENT_TABLES = ["chunks_fts", "chunks_fts_data", "chunks_fts_idx",
-                   "chunks_fts_docsize", "chunks_fts_config", "nodes", "docs"]
+FACET_NAMES = ("research_theme", "method", "facility", "role_of_wasp12b")
 
 
 def load_classification(settings: Settings, doc_id: str) -> dict:
@@ -91,18 +50,30 @@ def load_classification(settings: Settings, doc_id: str) -> dict:
     return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
 
+def _facets_for(cls: dict) -> dict:
+    return {facet: cls.get(facet) for facet in FACET_NAMES if cls.get(facet) is not None}
+
+
+def _insert_doc_facets(conn: sqlite3.Connection, doc_id: str, facets: dict) -> None:
+    for facet, value in facets.items():
+        values = value if isinstance(value, list) else [value]
+        for v in values:
+            if v is None or v == []:
+                continue
+            conn.execute("INSERT INTO doc_facets (doc_id, facet, value) VALUES (?,?,?)",
+                        (doc_id, facet, v))
+
+
 def insert_full_doc(conn: sqlite3.Connection, settings: Settings, doc_id: str, paper: dict,
                      cls: dict, fulltext_source: str) -> None:
+    facets = _facets_for(cls)
     conn.execute(
         "INSERT INTO docs (doc_id, title, year, journal, authors_json, "
-        "fulltext_source, has_fulltext, research_theme_json, method_json, "
-        "facility_json, role_of_wasp12b) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        "fulltext_source, has_fulltext, facets_json) VALUES (?,?,?,?,?,?,?,?)",
         (doc_id, paper.get("title"), paper.get("year"), paper.get("journal"),
          json.dumps(paper.get("authors")), fulltext_source, 1,
-         json.dumps(cls.get("research_theme") or []),
-         json.dumps(cls.get("method") or []),
-         json.dumps(cls.get("facility") or []),
-         cls.get("role_of_wasp12b")))
+         json.dumps(facets, ensure_ascii=False)))
+    _insert_doc_facets(conn, doc_id, facets)
 
     section_tree = json.loads((settings.sections_dir / f"{doc_id}.json").read_text(encoding="utf-8"))
 
@@ -128,10 +99,9 @@ def insert_stub_doc(conn: sqlite3.Connection, entry: dict) -> None:
     doc_id = entry["doc_id"]
     conn.execute(
         "INSERT INTO docs (doc_id, title, year, journal, authors_json, "
-        "fulltext_source, has_fulltext, research_theme_json, method_json, "
-        "facility_json, role_of_wasp12b) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        "fulltext_source, has_fulltext, facets_json) VALUES (?,?,?,?,?,?,?,?)",
         (doc_id, entry.get("title"), entry.get("year"), entry.get("journal"),
-         json.dumps(entry.get("authors")), None, 0, "[]", "[]", "[]", None))
+         json.dumps(entry.get("authors")), None, 0, "{}"))
     authors = entry.get("authors") or ""
     stub_text = f"{entry.get('title', '')}. {authors}. {entry.get('journal', '')} ({entry.get('year', '')})."
     conn.execute(
@@ -149,11 +119,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def run(settings: Settings) -> None:
     settings.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(settings.sqlite_path)
-    conn.executescript(SCHEMA_PERSISTENT)  # never dropped
-
-    for table in CONTENT_TABLES:
-        conn.execute(f"DROP TABLE IF EXISTS {table}")
-    conn.executescript(SCHEMA_CONTENT)
+    schema.ensure_persistent(conn)   # never dropped
+    schema.rebuild_content(conn)     # drop + recreate docs/nodes/doc_facets/chunks_fts
 
     papers_by_id = {p["doc_id"]: p for p in settings.corpus.load_papers()}
     section_files = {f.stem for f in settings.sections_dir.glob("*.json")}
@@ -183,8 +150,9 @@ def run(settings: Settings) -> None:
 
     n_docs = conn.execute("SELECT COUNT(*) FROM docs").fetchone()[0]
     n_nodes = conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
+    n_facets = conn.execute("SELECT COUNT(*) FROM doc_facets").fetchone()[0]
     print(f"\nIndexed: {full_count} full-text papers + {stub_count} stub docs "
-          f"= {n_docs} docs, {n_nodes} nodes")
+          f"= {n_docs} docs, {n_nodes} nodes, {n_facets} facet rows")
     conn.close()
 
 

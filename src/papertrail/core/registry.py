@@ -163,6 +163,12 @@ class CorpusRegistry:
             self._doc_tree = self._build_doc_tree()
         return self._doc_tree
 
+    # Which facet groups the doc tree — a wasp12b-specific literal until
+    # papertrail migration Step 9 makes it a corpus.yaml `navigation.tree_facet`
+    # value; Step 7 (this schema change) only replaces the STORAGE
+    # (research_theme_json column -> facets_json blob), not this choice.
+    _TREE_FACET = "research_theme"
+
     def _build_doc_tree(self) -> dict:
         theme_groups: dict[str, list[dict]] = {}
         stubs: list[dict] = []
@@ -173,7 +179,8 @@ class CorpusRegistry:
             if not row["has_fulltext"]:
                 stubs.append(leaf)
                 continue
-            themes = json.loads(row["research_theme_json"] or "[]")
+            facets = json.loads(row["facets_json"] or "{}")
+            themes = facets.get(self._TREE_FACET) or []
             for theme in themes or ["(uncategorized)"]:
                 theme_groups.setdefault(theme, []).append(leaf)
 

@@ -36,7 +36,6 @@ with.
 """
 import json
 import os
-import re
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -54,17 +53,9 @@ from ..config import Settings, load_settings
 from ..core.citations import InvalidCitationsError, validate_and_enrich
 from ..core.nodes import context_window
 from ..core.registry import CorpusRegistry
+from ..core.search import format_hits, paper_filters_sql, run_search
 
 NO_INDEX_MSG = "Search index not found — run `papertrail index` first."
-
-
-def fts_escape(query: str) -> str:
-    """Quote each term so user input can't break FTS5 syntax; OR-join so bm25
-    ranks best-covered chunks first without requiring every term. (Hangul in
-    the char class is vestigial for this corpus — kept for adoption to a
-    corpus that has any, per kasi_papers_analysis's exact function.)"""
-    terms = re.findall(r"[\w가-힣.-]+", query)
-    return " OR ".join(f'"{t}"' for t in terms) if terms else '""'
 
 
 def canonical_doc_id(db: sqlite3.Connection, doc_id: str) -> str | None:
@@ -74,53 +65,6 @@ def canonical_doc_id(db: sqlite3.Connection, doc_id: str) -> str | None:
     safe = doc_id.replace("&", "+")
     row = db.execute("SELECT doc_id FROM docs WHERE doc_id = ?", (safe,)).fetchone()
     return row["doc_id"] if row else None
-
-
-def paper_filters_sql(research_theme=None, method=None, facility=None,
-                      role_of_wasp12b=None, year=None) -> tuple[str, list]:
-    clauses, params = [], []
-    if research_theme:
-        clauses.append("d.research_theme_json LIKE ?")
-        params.append(f'%"{research_theme}"%')
-    if method:
-        clauses.append("d.method_json LIKE ?")
-        params.append(f'%"{method}"%')
-    if facility:
-        clauses.append("d.facility_json LIKE ?")
-        params.append(f'%"{facility}"%')
-    if role_of_wasp12b:
-        clauses.append("d.role_of_wasp12b = ?")
-        params.append(role_of_wasp12b)
-    if year is not None:
-        clauses.append("d.year = ?")
-        params.append(year)
-    return (" AND " + " AND ".join(clauses)) if clauses else "", params
-
-
-def run_search(db, query: str, limit: int, **filters) -> list[sqlite3.Row]:
-    where, params = paper_filters_sql(**filters)
-    return db.execute(
-        f"""SELECT n.doc_id, n.node_id, n.block_type, d.title, d.year,
-                   snippet(chunks_fts, 0, '**', '**', ' … ', 40) AS snip,
-                   bm25(chunks_fts) AS score
-            FROM chunks_fts
-            JOIN nodes n ON n.id = chunks_fts.rowid
-            JOIN docs d ON d.doc_id = n.doc_id
-            WHERE chunks_fts MATCH ?{where}
-            ORDER BY score LIMIT ?""",
-        [fts_escape(query), *params, limit]).fetchall()
-
-
-def format_hits(hits) -> str:
-    if not hits:
-        return "No results."
-    lines = []
-    for h in hits:
-        block_type = h["block_type"] or "heading"  # containers have no block_type
-        lines.append(f"### {h['doc_id']} ({h['year']}) — {h['title']}\n"
-                     f"*node {h['node_id']} / {block_type}* (score {h['score']:.2f})\n"
-                     f"{h['snip']}")
-    return "\n\n".join(lines)
 
 
 def _find_node(nodes: list[dict], node_id: str, parent_title: str | None = None):
@@ -191,8 +135,8 @@ def build_server(settings: Settings) -> MCPServer:
         finally:
             db.close()
         meta = {k: row[k] for k in row.keys()}
-        for k in ("research_theme_json", "method_json", "facility_json", "authors_json"):
-            meta[k.removesuffix("_json")] = json.loads(meta.pop(k)) if meta[k] else None
+        meta["authors"] = json.loads(meta.pop("authors_json")) if meta["authors_json"] else None
+        meta.update(json.loads(meta.pop("facets_json") or "{}"))
         meta["has_fulltext"] = bool(meta["has_fulltext"])
         out = "```yaml\n" + yaml.safe_dump(meta, sort_keys=False, allow_unicode=True) + "```\n"
         if not row["has_fulltext"]:
@@ -296,22 +240,21 @@ def build_server(settings: Settings) -> MCPServer:
             return NO_INDEX_MSG
         try:
             if not any([research_theme, method, facility, role_of_wasp12b, year]):
-                themes, methods, facilities, years = set(), set(), set(), set()
-                for row in db.execute(
-                        "SELECT research_theme_json, method_json, facility_json, year FROM docs"):
-                    themes.update(json.loads(row["research_theme_json"]))
-                    methods.update(json.loads(row["method_json"]))
-                    facilities.update(json.loads(row["facility_json"]))
-                    if row["year"]:
-                        years.add(row["year"])
+                # facet, value -> distinct values, one indexed query instead of a
+                # full-table scan + per-row json.loads (papertrail migration Step 7).
+                facet_values: dict[str, set] = {}
+                for row in db.execute("SELECT DISTINCT facet, value FROM doc_facets"):
+                    facet_values.setdefault(row["facet"], set()).add(row["value"])
+                years = {r["year"] for r in db.execute("SELECT DISTINCT year FROM docs")
+                         if r["year"]}
                 total = db.execute("SELECT COUNT(*) FROM docs").fetchone()[0]
                 full = db.execute("SELECT COUNT(*) FROM docs WHERE has_fulltext = 1").fetchone()[0]
                 return (f"{total} papers indexed ({full} with full text, "
                         f"{total - full} metadata-only). Filter values —\n"
-                        f"- research_theme: {', '.join(sorted(themes))}\n"
-                        f"- method: {', '.join(sorted(methods))}\n"
-                        f"- facility: {', '.join(sorted(facilities))}\n"
-                        f"- role_of_wasp12b: primary-target, incidental-mention\n"
+                        f"- research_theme: {', '.join(sorted(facet_values.get('research_theme', ())))}\n"
+                        f"- method: {', '.join(sorted(facet_values.get('method', ())))}\n"
+                        f"- facility: {', '.join(sorted(facet_values.get('facility', ())))}\n"
+                        f"- role_of_wasp12b: {', '.join(sorted(facet_values.get('role_of_wasp12b', ())))}\n"
                         f"- year: {', '.join(map(str, sorted(years)))}")
             where, params = paper_filters_sql(research_theme, method, facility,
                                               role_of_wasp12b, year)
@@ -325,10 +268,11 @@ def build_server(settings: Settings) -> MCPServer:
         lines = ["| doc_id | Year | Title | Role | Facility | Fulltext |",
                  "|---|---|---|---|---|---|"]
         for r in rows:
-            facs = ", ".join(json.loads(r["facility_json"]))
+            facets = json.loads(r["facets_json"] or "{}")
+            facs = ", ".join(facets.get("facility") or [])
             title = (r["title"] or "")[:70]
             lines.append(f"| {r['doc_id']} | {r['year']} | {title} "
-                         f"| {r['role_of_wasp12b'] or ''} | {facs} "
+                         f"| {facets.get('role_of_wasp12b') or ''} | {facs} "
                          f"| {'yes' if r['has_fulltext'] else 'no'} |")
         lines.append(f"\n{len(rows)} paper(s).")
         return "\n".join(lines)
