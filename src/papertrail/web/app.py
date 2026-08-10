@@ -16,10 +16,10 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
+from importlib import resources
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..config import Settings, load_settings
@@ -32,19 +32,19 @@ from .chat import stream_chat
 
 logging.basicConfig(level=logging.INFO)
 
-# Interim: index.html still lives in webapp/static/ (repo-layout-relative),
-# not yet inside the package — moving it in is papertrail migration Step 10
-# (needs package-data declarations + importlib.resources, done together with
-# the asset_prefix fix). This path only works from within this repo checkout.
-_STATIC_DIR = Path(__file__).resolve().parents[3] / "webapp" / "static"
 
-
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, root_path: str = "") -> FastAPI:
+    """`root_path` (papertrail migration Step 10): if this app is mounted
+    under a path prefix (e.g. behind a reverse proxy at /kb), pass it here
+    so figure images resolve — every rendered <img src=...> uses
+    `{root_path}/assets/...` via CorpusRegistry's asset_prefix, replacing
+    the old bare "assets" relative path that only ever worked because the
+    SPA happened to always be served at "/"."""
     settings = settings or load_settings()
-    registry = CorpusRegistry(settings)
+    registry = CorpusRegistry(settings, asset_prefix=f"{root_path}/assets")
     store = Store(settings)
 
-    app = FastAPI(title=settings.corpus.title)
+    app = FastAPI(title=settings.corpus.title, root_path=root_path)
     app.state.settings = settings
     app.state.registry = registry
     app.state.store = store
@@ -210,12 +210,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def list_answers(kind: str | None = None):
         return store.list_answers(kind=kind)
 
+    # Packaged with the app (papertrail migration Step 10) — read once at
+    # factory time, not per-request; there's no build step to re-run, so
+    # this only changes when the package itself is upgraded.
+    _index_html = resources.files("papertrail.web").joinpath("static", "index.html").read_text(encoding="utf-8")
+
     @app.get("/")
     def index():
-        return FileResponse(_STATIC_DIR / "index.html")
+        return HTMLResponse(_index_html)
 
-    # Figure images: /assets/<doc_id>/<file>. Mounted last so it never
-    # shadows the API routes above.
+    # Figure images: {root_path}/assets/<doc_id>/<file>. Mounted last so it
+    # never shadows the API routes above. The mount decision itself is
+    # still made at factory time (not per-request) — an assets_dir created
+    # AFTER the app started still needs a restart to pick up, same as before.
     if settings.assets_dir.is_dir():
         app.mount("/assets", StaticFiles(directory=settings.assets_dir), name="assets")
 

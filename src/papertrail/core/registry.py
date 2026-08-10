@@ -84,11 +84,19 @@ class CorpusRegistry:
     `settings` defaults to `load_settings()` (env/cwd-resolved) so
     `CorpusRegistry()` keeps working with no arguments — kb/mcp_server.py
     still constructs it that way until Step 5 passes settings through
-    explicitly from `build_server`."""
+    explicitly from `build_server`.
 
-    def __init__(self, settings: Settings | None = None):
+    `asset_prefix` (papertrail migration Step 10) is threaded to
+    render_doc_html for every rendered <img src=...> — defaults to
+    "/assets" (leading slash) since that's what a root_path-mounted app
+    needs; render_node_html's OWN default (bare "assets", no leading
+    slash) is what every consumer got before this was configurable at
+    all, since registry.py always called it with no argument."""
+
+    def __init__(self, settings: Settings | None = None, asset_prefix: str = "/assets"):
         self.settings = settings or load_settings()
         self.style: CitationStyle = load_citation_style(self.settings.corpus)
+        self.asset_prefix = asset_prefix
         self._doc_cache: dict[str, Doc] = {}
         self._doc_tree: dict | None = None
         self._meta_by_id: dict[str, sqlite3.Row] = {}
@@ -133,7 +141,7 @@ class CorpusRegistry:
             authors=ref.authors, year=row["year"], journal=row["journal"] or "",
             native_id=ref.native_id, extra=ref.extra,
             node_by_id=_flatten_by_id(tree["structure"]),
-            html=render_doc_html(tree["structure"]),
+            html=render_doc_html(tree["structure"], self.asset_prefix),
             tree=tree,
         )
 

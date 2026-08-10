@@ -321,11 +321,60 @@ def write_page(settings: Settings, doc_id: str, paper: dict, classification: dic
     tmp.write_text(content, encoding="utf-8")
     os.replace(tmp, out_path)
 
-    citations_path = settings.wiki_dir / "papers" / f"{doc_id}.citations.json"
-    tmp2 = citations_path.with_suffix(".citations.json.tmp")
-    tmp2.write_text(json.dumps({"doc_id": doc_id, "citations": page["citations"]},
-                                ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp2, citations_path)
+    # page["citations"] is None for a --frontmatter-only rewrite (see
+    # rewrite_frontmatter_only below) -- the citations file already has the
+    # right content (the body_markdown, and hence its [n] markers, didn't
+    # change), so leave it untouched rather than overwriting it with null.
+    if page.get("citations") is not None:
+        citations_path = settings.wiki_dir / "papers" / f"{doc_id}.citations.json"
+        tmp2 = citations_path.with_suffix(".citations.json.tmp")
+        tmp2.write_text(json.dumps({"doc_id": doc_id, "citations": page["citations"]},
+                                    ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp2, citations_path)
+
+
+def _extract_body_markdown(text: str) -> str | None:
+    """Recover the LLM-authored body_markdown from an already-written page
+    — the part between the H1 title line and the '## Links' footer write_page
+    always appends. Returns None if the file doesn't look like one
+    write_page() wrote (an actionable signal for --frontmatter-only to skip
+    it and report why, rather than silently mangling something else)."""
+    parts = text.split("---\n", 2)
+    if len(parts) != 3:
+        return None
+    rest = parts[2].lstrip("\n")  # write_page's template leaves a blank line after the closing "---"
+    if not rest.startswith("# "):
+        return None
+    _, _, after_title = rest.partition("\n\n")
+    idx = after_title.rfind("\n\n## Links")
+    return after_title[:idx] if idx != -1 else after_title.rstrip("\n")
+
+
+def rewrite_frontmatter_only(settings: Settings, doc_id: str, paper: dict, classification: dict,
+                              all_classifications: dict, all_papers_by_id: dict, style: CitationStyle,
+                              taxonomy: dict[str, FacetSpec], model: str, prompt_version: str) -> str | None:
+    """Reload an existing wiki page, keep its LLM-authored body_markdown
+    byte-for-byte, and recompute frontmatter + the '## Links' footer from
+    CURRENT metadata/classification/taxonomy — zero LLM calls, so it works
+    with API_KEY unset. Useful after re-running Stage B with a changed
+    taxonomy, or after tweaking related-paper scoring, when the prose
+    itself doesn't need to change. Returns an error string on failure, or
+    None on success (this was declared as a flag since paper_pages.py's
+    first version but never implemented — `args.frontmatter_only` was
+    parsed and then never read, a silent no-op — see the migration plan's
+    Step 10)."""
+    path = settings.wiki_dir / "papers" / f"{doc_id}.md"
+    if not path.exists():
+        return "no existing page to rewrite"
+    body = _extract_body_markdown(path.read_text(encoding="utf-8"))
+    if body is None:
+        return "couldn't parse body_markdown out of the existing page"
+
+    related = related_papers(doc_id, classification, all_classifications, taxonomy)
+    fulltext_source = paper.get("fulltext_source") or "publisher_pdf"
+    write_page(settings, doc_id, paper, classification, {"body_markdown": body, "citations": None},
+              related, fulltext_source, all_papers_by_id, model, style, taxonomy, prompt_version)
+    return None
 
 
 def process_paper(settings: Settings, client, doc_id: str, paper: dict, classification: dict,
@@ -365,7 +414,70 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _run_frontmatter_only(settings: Settings, args, papers_by_id: dict, all_classifications: dict) -> None:
+    """--frontmatter-only's driver: no LLM calls, no API_KEY needed. See
+    rewrite_frontmatter_only's docstring for what this actually does and
+    why it existed as a declared-but-unimplemented flag before."""
+    taxonomy = settings.corpus.taxonomy
+    style = load_citation_style(settings.corpus)
+
+    section_files = sorted(settings.sections_dir.glob("*.json"))
+    todo = []
+    for f in section_files:
+        doc_id = f.stem
+        if args.only and doc_id != args.only:
+            continue
+        if doc_id not in all_classifications:
+            continue
+        if not (settings.wiki_dir / "papers" / f"{doc_id}.md").exists():
+            continue  # nothing to rewrite -- Stage C hasn't run for this one
+        todo.append(doc_id)
+    if args.limit:
+        todo = todo[:args.limit]
+
+    print(f"Existing pages to rewrite frontmatter for: {len(todo)}")
+    if args.dry_run:
+        for d in todo:
+            print(f"  [dry-run] {d}")
+        return
+
+    failed = []
+    for doc_id in tqdm(todo, unit="paper", desc="Rewriting frontmatter"):
+        # Preserve the EXISTING prompt_version -- the prose didn't change,
+        # so it's still whatever prompt actually generated it; recomputing
+        # against the CURRENT prompt would misrepresent an untouched body
+        # as freshly regenerated.
+        existing_version = page_prompt_version(settings, doc_id) or "unknown"
+        error = rewrite_frontmatter_only(settings, doc_id, papers_by_id[doc_id],
+                                         all_classifications[doc_id], all_classifications,
+                                         papers_by_id, style, taxonomy, settings.bulk_model,
+                                         existing_version)
+        if error:
+            failed.append((doc_id, error))
+
+    print(f"\nRewritten: {len(todo) - len(failed)} | failed: {len(failed)}")
+    for d, e in failed:
+        print(f"  FAILED {d}: {e}")
+
+
 def run(settings: Settings, args) -> None:
+    if args.frontmatter_only and args.force:
+        sys.exit("--frontmatter-only and --force are mutually exclusive "
+                 "(frontmatter-only never regenerates prose, so --force has nothing to force)")
+
+    # fulltext_source comes from the adapter now (papertrail migration Step 9 —
+    # it used to be hardcoded here as "publisher_pdf" for everyone with one
+    # bibcode-literal exception; the adapter already computes it correctly
+    # from the PDF fetch manifest, so this stage just reads it).
+    papers_by_id = {p["doc_id"]: p for p in settings.corpus.load_papers()}
+    all_classifications = {}
+    for f in settings.classification_dir.glob("*.yaml"):
+        all_classifications[f.stem] = yaml.safe_load(f.read_text(encoding="utf-8"))
+
+    if args.frontmatter_only:
+        _run_frontmatter_only(settings, args, papers_by_id, all_classifications)
+        return
+
     if not settings.api_key:
         sys.exit("API_KEY not found in .env")
 
@@ -373,16 +485,6 @@ def run(settings: Settings, args) -> None:
     heading_names = [e["name"] for e in heading_entries(headings_raw)]
     system = build_system_prompt(settings, headings_raw)
     prompt_version = prompts.stage_prompt_version(system)
-
-    # fulltext_source comes from the adapter now (papertrail migration Step 9 —
-    # it used to be hardcoded here as "publisher_pdf" for everyone with one
-    # bibcode-literal exception; the adapter already computes it correctly
-    # from the PDF fetch manifest, so this stage just reads it).
-    papers_by_id = {p["doc_id"]: p for p in settings.corpus.load_papers()}
-
-    all_classifications = {}
-    for f in settings.classification_dir.glob("*.yaml"):
-        all_classifications[f.stem] = yaml.safe_load(f.read_text(encoding="utf-8"))
 
     section_files = sorted(settings.sections_dir.glob("*.json"))
     todo = []
