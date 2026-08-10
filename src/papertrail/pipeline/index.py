@@ -22,10 +22,13 @@ each of block_type='stub' so they're findable by title/author search.
 Facet storage (papertrail migration Step 7): each doc's facet values go into
 `docs.facets_json` (one dict, `{facet: value_or_list}`) AND `doc_facets`
 (one row per (doc_id, facet, value) pair, including single-valued facets —
-see core/schema.py's docstring). The four facet names themselves
-(research_theme/method/facility/role_of_wasp12b) are still wasp12b-specific
-literals here — making that taxonomy-driven is Step 9's job (Seam 3
-remainder), not this one.
+see core/schema.py's docstring). The facet names read from `settings.corpus.
+taxonomy` (Step 9, Seam 3) — this file used to hardcode a
+`FACET_NAMES = ("research_theme", "method", "facility", "role_of_wasp12b")`
+tuple, missed when Seam 3 generalized every *other* taxonomy consumer.
+Caught by Step 12's demo corpus: a facet not in that literal tuple (its
+`outcome`) was silently dropped from both `facets_json` and `doc_facets`
+with no error at all — exactly the class of bug this step exists to find.
 
 Usage:
     papertrail index
@@ -40,8 +43,6 @@ from tqdm import tqdm
 from ..config import Settings, load_settings
 from ..core import schema
 
-FACET_NAMES = ("research_theme", "method", "facility", "role_of_wasp12b")
-
 
 def load_classification(settings: Settings, doc_id: str) -> dict:
     path = settings.classification_dir / f"{doc_id}.yaml"
@@ -50,8 +51,8 @@ def load_classification(settings: Settings, doc_id: str) -> dict:
     return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
 
-def _facets_for(cls: dict) -> dict:
-    return {facet: cls.get(facet) for facet in FACET_NAMES if cls.get(facet) is not None}
+def _facets_for(cls: dict, facet_names) -> dict:
+    return {facet: cls.get(facet) for facet in facet_names if cls.get(facet) is not None}
 
 
 def _insert_doc_facets(conn: sqlite3.Connection, doc_id: str, facets: dict) -> None:
@@ -66,7 +67,7 @@ def _insert_doc_facets(conn: sqlite3.Connection, doc_id: str, facets: dict) -> N
 
 def insert_full_doc(conn: sqlite3.Connection, settings: Settings, doc_id: str, paper: dict,
                      cls: dict, fulltext_source: str) -> None:
-    facets = _facets_for(cls)
+    facets = _facets_for(cls, settings.corpus.taxonomy.keys())
     conn.execute(
         "INSERT INTO docs (doc_id, title, year, journal, authors_json, "
         "fulltext_source, has_fulltext, facets_json, native_id, extra_json) "

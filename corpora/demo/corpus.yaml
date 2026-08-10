@@ -1,0 +1,68 @@
+corpus:
+  name: demo
+  title: Demo Knowledge Base
+  description: A throwaway corpus proving the papertrail pipeline needs no
+    WASP-12b-specific code — see docs/spec/05_adoption.md's Step 12.
+  glyph: "🧪"
+  # Deliberately NOT "the exoplanet WASP-12b" — the whole point of this
+  # corpus is to prove classify.py/paper_pages.py/topic_pages.py/chat's
+  # prompts actually read this from corpus.yaml instead of the literal
+  # string every one of them hardcoded before the papertrail migration.
+  subject: hot Jupiter exoplanets
+  citation_example:
+    bad: "Fortney et al. (2007) modeled the atmospheric structure, in contrast to earlier isothermal treatments."
+    good: "Fortney et al. (2007) modeled the atmospheric structure [3], in contrast to earlier isothermal treatments [3]."
+
+source:
+  marker_dir: ../../paper_download/data/marker   # unused directly (adapter.py resolves
+                                                   # its own path) but still required by
+                                                   # Corpus.marker_dir()'s contract
+  metadata_adapter: ./adapter.py:load
+  doc_id_field: doc_id   # not bibcode-shaped here; informational only, nothing reads it
+
+# No `identity:` external_links at all (05_adoption.md step 6: an omitted
+# identity block is valid — labels fall back to doc_id/title, no links
+# rendered) plus an explicit citation_style override to `plain`, since this
+# adapter supplies no authors and the author-year uncited-mention heuristic
+# (calibrated on wasp12b's bibliography conventions) has no business running
+# against a corpus that was never going to produce author-year prose anyway.
+identity:
+  citation_style: plain
+
+# Two facets (vs. wasp12b's four) — proves nothing downstream assumes a
+# fixed facet count or wasp12b's specific facet names.
+taxonomy:
+  method:
+    multi: true
+    label: Method
+    topic_pages: true
+    slug_prefix: method
+    similarity_weight: 2
+    values: [photometry, spectroscopy, radial-velocity, theory-modeling]
+  outcome:
+    multi: false
+    label: Outcome
+    topic_pages: false
+    similarity_weight: 1
+    values: [new-result, review-or-synthesis]
+
+navigation:
+  tree_facet: method
+  table_columns: [outcome]
+  year_pages: false   # this adapter never supplies a year — prove that's a supported combo
+  digest_headings: [Overview]
+
+# Three headings (vs. wasp12b's six), one with structured may_not_apply
+# guidance — exercises the same code path wasp12b's "WASP-12b-Specific
+# Findings" heading does, with a completely different name/subject.
+wiki_headings:
+  - Overview
+  - Key Results
+  - name: Open Questions
+    may_not_apply: true
+    guidance: what the paper itself flags as unresolved or needing follow-up work, if it says nothing explicit say so honestly
+
+models:
+  bulk_env: BULK_MODEL
+  synth_env: SYNTH_MODEL
+  chat_env: CHAT_MODEL
