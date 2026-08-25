@@ -12,6 +12,14 @@ RAG pipeline: a citation here isn't a similarity score attached after the fact, 
 pointer into a specific paragraph, table, figure, or equation that a reader (or another
 agent) can jump straight to.
 
+![The papertrail web app: a document tree, a section-level contents outline, the rendered
+paper, and a chat answer whose inline [n] markers link to exact source
+nodes](docs/images/webapp.png)
+
+*A corpus of planetary-nebula papers — neither of the two corpora in this repo. The
+`[6] [7] [8]` chips in the answer pane each resolve to a specific `(doc_id, node_id)`;
+clicking one jumps the reader pane to that paragraph.*
+
 ## Pipeline at a glance
 
 | Stage | Command | LLM? | Produces |
