@@ -20,6 +20,13 @@ dependencies = [
     # `import papertrail.mcp.server` raises ModuleNotFoundError. Belongs in
     # core deps, not the web extra, until that import is made lazy.
     "markdown>=3.5",
+    # topic_pages.py's parse_response() falls back to this when SYNTH_MODEL's
+    # JSON has a stray brace/unescaped quote at an unpredictable position in
+    # long free-text prose (observed on live Claude-via-gateway output; no
+    # fixed pattern to regex around -- see that function's docstring). Its
+    # output is never trusted blindly: validate_topic() still enforces
+    # dict-shape/non-empty prose/citations before a repair is accepted.
+    "json-repair>=0.63",
 ]
 
 [project.optional-dependencies]
