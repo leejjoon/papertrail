@@ -37,11 +37,18 @@ it up below, and calls `module.main(sys.argv[2:])`.
 | `topic-pages` | `papertrail.pipeline.topic_pages` | D: cross-paper topic pages |
 | `index` | `papertrail.pipeline.index` | E: build `kb.sqlite` |
 | `mcp` | `papertrail.mcp.server` | run the MCP server |
+| `ingest-pdf` | `papertrail.pipeline.ingest_pdf` | convert one PDF with Datalab, build sections, and refresh the index |
+| `serve` | `papertrail.web.serve` | run the browser reader for an explicit corpus |
 
 An unknown or missing subcommand prints `usage: papertrail <command> [args...]` plus this
 list to stderr and exits `2`.
 
-**`serve`/`run-all`/`lint`/`doctor` do not exist.** The web app is launched only via
+`ingest-pdf --init-corpus` creates a minimal manifest-backed `corpus.yaml` when missing.
+`--corpus-title` customizes its browser title and is valid only with `--init-corpus`.
+Existing corpus configuration is never overwritten.
+
+**`run-all`/`lint`/`doctor` do not exist.** The web app may be launched via
+`papertrail serve --corpus PATH` or directly via
 `uvicorn papertrail.web.asgi:app` (§6); `topic-pages --lint` (below) covers the one thing
 a standalone `lint` subcommand would.
 
@@ -233,7 +240,8 @@ in USERS_GUIDE.md).
 | Key | Required? | Notes |
 |---|---|---|
 | `marker_dir` | **Yes.** `Corpus.marker_dir()` does `raw["source"]["marker_dir"]` — `KeyError` if absent. Corpus-relative unless absolute. | An adapter that resolves its own marker path (like `corpora/demo/adapter.py`) still must set this key, even if nothing reads its value in that case. |
-| `metadata_adapter` | **Yes.** `"<mod_path>:<func_name>"`, split on `:`. | Resolved via `Corpus.load_module` (§2). |
+| `metadata_adapter` | Required unless `documents_file` is set. `"<mod_path>:<func_name>"`, split on `:`. | Resolved via `Corpus.load_module` (§2). Mutually exclusive with `documents_file`. |
+| `documents_file` | Required unless `metadata_adapter` is set. | Corpus-relative YAML containing a top-level `documents:` list. Intended for small or directly ingested corpora. |
 | `doc_id_field` | **No — dead key.** Zero readers anywhere in `src/papertrail`. | Both shipped corpora set it anyway (`safe_bibcode`, `doc_id`) with a comment saying it's informational only — don't assume it does anything. |
 
 ### `identity:` — fully optional

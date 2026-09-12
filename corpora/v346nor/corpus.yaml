@@ -1,0 +1,18 @@
+corpus:
+  name: v346nor
+  title: V346 Nor Paper Reader
+  description: Browser-readable extraction of the V346 Nor SiO jet draft.
+  glyph: "✦"
+  subject: the FUor-type young star V346 Nor
+
+source:
+  marker_dir: data/marker
+  documents_file: documents.yaml
+
+identity:
+  citation_style: author_year
+
+navigation:
+  year_pages: false
+
+wiki_headings: []

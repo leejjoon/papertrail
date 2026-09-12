@@ -1,16 +1,18 @@
 """papertrail console script.
 
-`serve` (webapp) and `run-all`/`lint`/`doctor` land as later migration steps
-wire them up — see .claude/plans/i-would-like-to-stateless-hellman.md.
+Each command imports its implementation lazily so optional web/Datalab/MCP
+dependencies are needed only by the command that uses them.
 """
 import sys
 
 _SUBCOMMANDS = {
+    "ingest-pdf": ("papertrail.pipeline.ingest_pdf", "Datalab PDF conversion + sections + index"),
     "sections": ("papertrail.pipeline.sections", "Stage A: Marker JSON -> section-tree JSON"),
     "classify": ("papertrail.pipeline.classify", "Stage B: LLM taxonomy classification"),
     "paper-pages": ("papertrail.pipeline.paper_pages", "Stage C: cited wiki paper pages"),
     "topic-pages": ("papertrail.pipeline.topic_pages", "Stage D: cross-paper topic pages"),
     "index": ("papertrail.pipeline.index", "Stage E: build kb.sqlite"),
+    "serve": ("papertrail.web.serve", "run the browser reader"),
     "mcp": ("papertrail.mcp.server", "run the MCP server (stdio, or HTTP via MCP_TRANSPORT)"),
 }
 

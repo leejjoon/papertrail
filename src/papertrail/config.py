@@ -102,7 +102,7 @@ class Corpus:
           load_papers() exactly. This is wasp12b's interim value between
           migration Steps 6 and 8, when its adapter still lived inside the
           old kb/ layout rather than its own corpus directory."""
-        if mod_path.startswith(".") or mod_path.startswith("/"):
+        if mod_path.startswith((".", "/")):
             file_path = Path(mod_path)
             if not file_path.is_absolute():
                 file_path = (self.root / file_path).resolve()
@@ -127,10 +127,45 @@ class Corpus:
         mod_path, _ = self.raw["source"]["metadata_adapter"].split(":")
         return self.load_module(mod_path)
 
+    def documents_path(self) -> Path | None:
+        """Path to a declarative document manifest, when configured.
+
+        ``source.documents_file`` is the zero-code alternative to a Python
+        ``metadata_adapter``.  Keeping it corpus-relative makes a small corpus
+        self-contained while preserving adapters for richer metadata sources.
+        """
+        raw = (self.raw.get("source") or {}).get("documents_file")
+        if not raw:
+            return None
+        path = Path(raw)
+        return path if path.is_absolute() else (self.root / path).resolve()
+
     def load_papers(self) -> list[dict]:
         """One dict per fetchable/known document, each with at least
         doc_id/title/authors/year/journal/extra (docs/spec/01_data_contracts.md)."""
-        _, func_name = self.raw["source"]["metadata_adapter"].split(":")
+        source = self.raw.get("source") or {}
+        documents_path = self.documents_path()
+        adapter = source.get("metadata_adapter")
+        if documents_path and adapter:
+            raise CorpusConfigError(
+                "source.documents_file and source.metadata_adapter are mutually exclusive")
+        if documents_path:
+            if not documents_path.exists():
+                raise CorpusConfigError(f"documents file not found: {documents_path}")
+            parsed = yaml.safe_load(documents_path.read_text(encoding="utf-8")) or {}
+            documents = parsed.get("documents") if isinstance(parsed, dict) else parsed
+            if not isinstance(documents, list):
+                raise CorpusConfigError(
+                    f"documents file must contain a list or a 'documents' list: {documents_path}")
+            for i, document in enumerate(documents):
+                if not isinstance(document, dict) or not document.get("doc_id"):
+                    raise CorpusConfigError(
+                        f"document {i} in {documents_path} must be a mapping with doc_id")
+            return documents
+        if not adapter:
+            raise CorpusConfigError(
+                "source must define either documents_file or metadata_adapter")
+        _, func_name = adapter.split(":")
         return getattr(self.adapter_module(), func_name)()
 
 

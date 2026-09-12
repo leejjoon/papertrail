@@ -40,7 +40,8 @@ mcp = [
     # mcp.server.fastmcp.FastMCP. A bare >=2 would break silently on 3.x.
     "mcp>=2.0,<3",
 ]
-all = ["papertrail[web,mcp]"]
+datalab = ["requests>=2.31"]
+all = ["papertrail[web,mcp,datalab]"]
 dev = ["pytest>=8", "ruff"]
 
 [project.scripts]

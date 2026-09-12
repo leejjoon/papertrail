@@ -51,10 +51,11 @@ my-corpus/
 
 The corpus root is **never** inside the installed `papertrail` package — `corpora/
 wasp12b/` and `corpora/demo/` in this repo are two examples, but a corpus can live
-anywhere on disk (`~/my-corpus/`, a mounted volume, wherever). Marker JSON acquisition
-(PDF → Datalab/Marker → JSON) is explicitly out of scope for papertrail — see this repo's
-`paper_download/PAPER_DOWNLOAD_HOWTO.md` for one way to do it; papertrail's contract
-starts at "I have a directory of Marker JSON files."
+anywhere on disk (`~/my-corpus/`, a mounted volume, wherever). For an existing directory
+of Marker JSON, Papertrail starts directly at Stage A. For a single local PDF,
+`papertrail ingest-pdf FILE --corpus PATH` provides the supported Datalab conversion
+path and immediately runs Stage A plus Stage E. The older `paper_download/` scripts
+remain corpus-specific batch acquisition tooling.
 
 ## 3. Corpus resolution and `.env`
 
@@ -256,12 +257,10 @@ count in the pipeline. Stage D is a handful of calls (one per facet value with
 ## 9. Serving the web app
 
 ```
-PAPERTRAIL_CORPUS=/path/to/corpus uvicorn papertrail.web.asgi:app --port 8000
+papertrail serve --corpus /path/to/corpus --port 8000
 ```
-There is no `--corpus` flag and no `papertrail serve` subcommand for the web app —
-`web/asgi.py`'s module-level `app = create_app(...)` resolves the corpus purely from
-`PAPERTRAIL_CORPUS`/`KB_DIR`/upward-search (§3), the same mechanism the MCP server used
-before it gained `--corpus`.
+Deployment tools may instead launch `uvicorn papertrail.web.asgi:app`; that module-level
+entry point resolves the corpus through `PAPERTRAIL_CORPUS`/`KB_DIR`/upward-search (§3).
 
 Set `ROOT_PATH=/some-prefix` if deploying behind a reverse proxy at a path prefix — it's
 threaded explicitly into every rendered `<img src="...">` URL, which uvicorn's own

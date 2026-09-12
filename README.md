@@ -30,6 +30,10 @@ clicking one jumps the reader pane to that paragraph.*
 | D | `papertrail topic-pages` | expensive | Cross-paper topic pages + index |
 | E | `papertrail index` | no | `kb.sqlite` (SQLite + FTS5) |
 
+For a single local PDF, `papertrail ingest-pdf FILE --corpus PATH` performs the
+Datalab conversion, Stage A extraction, and Stage E indexing in one resumable
+command. Then run `papertrail serve --corpus PATH` to open the browser reader.
+
 Full flag reference: [REFERENCE.md §1](REFERENCE.md#1-cli). Working example with real
 output: [QUICKSTART.md](QUICKSTART.md).
 
@@ -94,6 +98,7 @@ of this repository into its own — `corpora/wasp12b/` still lives alongside
 | Doc | For |
 |---|---|
 | [QUICKSTART.md](QUICKSTART.md) | Seeing it work end-to-end in 15 minutes, no prior context needed |
+| [PDF_QUICKSTART.md](PDF_QUICKSTART.md) | Converting one local PDF with Datalab and reading it in the browser |
 | [USERS_GUIDE.md](USERS_GUIDE.md) | Adopting papertrail for your own corpus, task by task |
 | [REFERENCE.md](REFERENCE.md) | Looking up an exact CLI flag, config key, endpoint, or tool signature |
 | [DEVELOPERS_GUIDE.md](DEVELOPERS_GUIDE.md) | Modifying papertrail itself |
