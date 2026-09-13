@@ -16,7 +16,6 @@ import argparse
 import json
 import os
 import re
-import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -26,7 +25,7 @@ from tqdm import tqdm
 
 from .. import prompts
 from ..config import Settings, load_settings
-from .llm import get_client
+from .llm import get_client_or_exit, worker_count
 
 MAX_BODY_WORDS = 4000
 RETRIES = 2
@@ -104,6 +103,25 @@ def validate(result: dict, taxonomy: dict) -> str | None:
     return None
 
 
+def output_schema(taxonomy: dict) -> dict:
+    properties = {}
+    for facet, spec in taxonomy.items():
+        value = {"type": "string", "enum": spec["values"]}
+        properties[facet] = (
+            {"type": "array", "items": value} if spec.get("multi") else value
+        )
+    properties.update({
+        "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+        "evidence": {"type": "string"},
+    })
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": [*taxonomy, "confidence", "evidence"],
+        "additionalProperties": False,
+    }
+
+
 def classify_one(client, model: str, system: str, title: str, body: str, taxonomy: dict) -> dict:
     system, user = build_prompt(system, title, body)
     last_error = None
@@ -117,14 +135,20 @@ def classify_one(client, model: str, system: str, title: str, body: str, taxonom
         # than paying a huge default budget for every one of the other papers
         # that resolve fine at 4000.
         max_tokens = 4000 * (2 ** attempt)  # 4000, 8000, 16000
-        resp = client.chat.completions.create(
+        attempt_user = user
+        if last_error:
+            attempt_user += (
+                "\n\n# Correction required\nYour previous result failed validation: "
+                f"{last_error}. Return a complete corrected replacement."
+            )
+        text = client.generate(
             model=model,
-            messages=[{"role": "system", "content": system},
-                      {"role": "user", "content": user}],
+            system=system,
+            user=attempt_user,
+            output_schema=output_schema(taxonomy),
             temperature=0.1,
             max_tokens=max_tokens,
         )
-        text = resp.choices[0].message.content or ""
         result = parse_response(text)
         if result is not None:
             error = validate(result, taxonomy)
@@ -150,7 +174,9 @@ def process_paper(settings: Settings, client, doc_id: str, papers_by_id: dict,
         return doc_id, str(e)
 
     result["generator"] = {
-        "model": settings.bulk_model, "prompt_version": prompt_version,
+        "backend": client.backend,
+        "model": client.model_label(settings.bulk_model),
+        "prompt_version": prompt_version,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
     result["doc_id"] = doc_id
@@ -188,15 +214,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--only", metavar="DOC_ID")
     parser.add_argument("--limit", type=int)
-    parser.add_argument("--workers", type=int, default=8)
+    parser.add_argument(
+        "--workers", type=int, default=None,
+        help="parallel requests (default: 8 for openai, 2 for codex)",
+    )
     parser.add_argument("--regenerate-if-prompt-changed", action="store_true")
     return parser
 
 
 def run(settings: Settings, args) -> None:
-    if not settings.api_key:
-        sys.exit("API_KEY not found in .env")
-
     taxonomy = settings.corpus.raw["taxonomy"]
     system_prompt = build_system_prompt(settings, taxonomy)
     prompt_version = prompts.stage_prompt_version(system_prompt)
@@ -237,10 +263,11 @@ def run(settings: Settings, args) -> None:
     # for the 2 papers with no PDF — those never reach this stage since there's
     # no section-tree file for them in the first place).
     papers_by_id = {p["doc_id"]: p for p in settings.corpus.load_papers()}
-    client = get_client(settings)
+    client = get_client_or_exit(settings)
+    workers = worker_count(settings, args.workers, 8)
 
     failed = []
-    with ThreadPoolExecutor(max_workers=args.workers) as executor:
+    with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {executor.submit(process_paper, settings, client, doc_id, papers_by_id,
                                    taxonomy, system_prompt, prompt_version): doc_id
                    for doc_id in todo}

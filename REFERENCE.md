@@ -65,7 +65,7 @@ They are genuinely not identical — sources: `pipeline/sections.py`
 | `--force` | ✓ | ✓ | ✓ | ✓ | — |
 | `--only DOC_ID` | ✓ | ✓ | ✓ | — | — |
 | `--limit N` | ✓ | ✓ | ✓ | — | — |
-| `--workers N` | — | ✓ (default `8`) | ✓ (default `5`) | — | — |
+| `--workers N` | — | ✓ (openai `8`, codex `2`) | ✓ (openai `5`, codex `2`) | — | — |
 | `--regenerate-if-prompt-changed` | — | ✓ | ✓ | — | — |
 | `--frontmatter-only` | — | — | ✓ | — | — |
 | `--lint` | — | — | — | ✓ | — |
@@ -92,7 +92,8 @@ They are genuinely not identical — sources: `pipeline/sections.py`
 - `--only DOC_ID` — process exactly one `doc_id`, skipping everything else.
 - `--limit N` — truncate the to-do list to the first `N` entries (after `--only`
   filtering, if both given).
-- `--workers N` — `ThreadPoolExecutor(max_workers=N)`. `topic-pages` is deliberately
+- `--workers N` — `ThreadPoolExecutor(max_workers=N)`. Defaults are backend-aware as
+  shown above; an explicit positive value always wins. `topic-pages` is deliberately
   serial (no `--workers`) since Stage D's synthesis calls are few and expensive.
 - `--regenerate-if-prompt-changed` — without this flag, a doc whose stored
   `prompt_version` differs from the current rendered prompt's hash is counted as
@@ -114,9 +115,10 @@ They are genuinely not identical — sources: `pipeline/sections.py`
 1. A normal (non-`--lint`) `topic-pages` run **always** runs the same lint check at the
    end and exits with its result — a successful generation that happens to leave a
    broken wiki link exits `1`, not `0`.
-2. `API_KEY` is required (hard `sys.exit("API_KEY not found in .env")`) by `classify`,
-   `paper-pages` (unless `--frontmatter-only`), and `topic-pages` (unless `--lint`).
-   `sections` and `index` never need an API key — they're pure/deterministic.
+2. With `PIPELINE_BACKEND=openai`, `API_KEY` is required by `classify`, `paper-pages`
+   (unless `--frontmatter-only`), and `topic-pages` (unless `--lint`). Codex mode uses
+   the cached `codex login` instead. `sections` and `index` never need model credentials
+   — they're pure/deterministic.
 
 ---
 
@@ -175,6 +177,8 @@ Plain `os.getenv(name, default)` — no `PAPERTRAIL_` alias for these:
 | `BULK_MODEL` | `"deepseek/deepseek-v4-flash-0731"` |
 | `SYNTH_MODEL` | `"anthropic/claude-opus-4.8"` |
 | `CHAT_MODEL` | `"anthropic/claude-sonnet-5"` |
+| `PIPELINE_BACKEND` | `"openai"` (`"codex"` is also supported) |
+| `PIPELINE_CODEX_MODEL` | `CODEX_MODEL`, then the Codex account default |
 | `AGENT_BACKEND` | `"langchain"` (`"codex"` is also supported) |
 | `AGENT_MODEL` | `CHAT_MODEL` |
 | `CODEX_MODEL` | `""` (use the Codex account/config default) |
@@ -186,6 +190,13 @@ Plain `os.getenv(name, default)` — no `PAPERTRAIL_` alias for these:
 The three model defaults are literal gateway-specific model identifiers — they will 404
 against a stock OpenAI-compatible endpoint that doesn't recognize them. Set all three
 explicitly for your own gateway.
+
+`PIPELINE_BACKEND` selects the provider for Stages B–D together. `openai` requires
+`BASE_URL`/`API_KEY` and uses `BULK_MODEL` for B/C plus `SYNTH_MODEL` for D. `codex`
+reuses `codex login`, requires no `API_KEY`, and resolves its model from
+`PIPELINE_CODEX_MODEL`, then `CODEX_MODEL`, then the account default. Codex defaults to
+2 workers in B/C; the OpenAI-compatible defaults remain 8 and 5 respectively, and an
+explicit `--workers` overrides either default.
 
 `BASE_URL`, `API_KEY`, and `AGENT_MODEL` configure the `langchain` browser-chat
 backend. The `codex` backend instead reuses the official CLI/SDK login established by
@@ -206,8 +217,9 @@ backend. The `codex` backend instead reuses the official CLI/SDK login establish
 
 `Settings` (frozen dataclass): `corpus_root, data_dir, sections_dir, assets_dir,
 classification_dir, wiki_dir, sqlite_path, base_url, api_key, bulk_model, synth_model,
-chat_model, agent_backend, agent_model, agent_mcp_url, agent_timeout_seconds,
-agent_recursion_limit, codex_model, codex_bin, corpus`.
+chat_model, pipeline_backend, pipeline_codex_model, agent_backend, agent_model,
+agent_mcp_url, agent_timeout_seconds, agent_recursion_limit, codex_model, codex_bin,
+corpus`.
 
 `Corpus` (frozen dataclass): `root`, `raw` (the full parsed `corpus.yaml`). Properties:
 `name`, `title`, `glyph`, `description`, `taxonomy`, `navigation` (§3). Methods:

@@ -14,10 +14,10 @@ glosses over, see [REFERENCE.md](REFERENCE.md).
 ## Prerequisites
 
 - Python ≥3.11.
-- An OpenAI-compatible LLM gateway: a `BASE_URL` and `API_KEY` in `.env`. This
-  repo's own `.env` also sets `BULK_MODEL`/`SYNTH_MODEL`/`CHAT_MODEL` — the package
-  defaults for these three are literal model identifiers for one specific gateway and
-  will 404 against a generic OpenAI endpoint, so set all three explicitly for yours.
+- A pipeline model backend. The default is an OpenAI-compatible gateway configured with
+  `BASE_URL`, `API_KEY`, `BULK_MODEL`, and `SYNTH_MODEL`. Alternatively, set
+  `PIPELINE_BACKEND=codex`, install the `codex` extra, and authenticate with `codex login`;
+  `PIPELINE_CODEX_MODEL` is optional.
 - A directory of Marker JSON (Datalab-hosted-API output) already on disk. Acquiring
   that is out of scope for papertrail itself — this repo's
   `paper_download/PAPER_DOWNLOAD_HOWTO.md` documents one way; `corpora/demo/` reuses 5
@@ -26,7 +26,7 @@ glosses over, see [REFERENCE.md](REFERENCE.md).
 ## 1. Install
 
 ```bash
-pip install -e '.[web,mcp]'
+pip install -e '.[web,mcp,agent,codex]'
 ```
 
 ## 2. Look at the corpus you're about to build

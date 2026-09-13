@@ -171,6 +171,10 @@ Shell, web search, filesystem-image access, persistent Codex history, and every 
 except Papertrail's three allowlisted research tools are disabled. Set `CODEX_BIN` only
 if the `codex` executable is not on `PATH`; `CODEX_MODEL` is optional.
 
+The single-PDF workflow skips the LLM-backed B–D stages. If you later add taxonomy and
+wiki configuration and run the full pipeline, `PIPELINE_BACKEND=codex` also routes B,
+C, and D through the cached Codex login; it is independent of `AGENT_BACKEND`.
+
 Keep both terminals running while using chat. The reader and search remain available if
 MCP is stopped, but chat reports that its research tools are unavailable. Stop either
 server with `Ctrl+C`.

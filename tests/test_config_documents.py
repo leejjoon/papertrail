@@ -52,6 +52,8 @@ def test_agent_settings_default_to_chat_model_and_local_mcp(tmp_path, monkeypatc
     monkeypatch.delenv("AGENT_MODEL", raising=False)
     monkeypatch.delenv("AGENT_MCP_URL", raising=False)
     monkeypatch.delenv("AGENT_BACKEND", raising=False)
+    monkeypatch.delenv("PIPELINE_BACKEND", raising=False)
+    monkeypatch.delenv("PIPELINE_CODEX_MODEL", raising=False)
     monkeypatch.delenv("CODEX_MODEL", raising=False)
     monkeypatch.delenv("CODEX_BIN", raising=False)
 
@@ -59,6 +61,8 @@ def test_agent_settings_default_to_chat_model_and_local_mcp(tmp_path, monkeypatc
 
     assert settings.agent_model == "gateway/tool-model"
     assert settings.agent_backend == "langchain"
+    assert settings.pipeline_backend == "openai"
+    assert settings.pipeline_codex_model == ""
     assert settings.agent_mcp_url == "http://127.0.0.1:8013/mcp"
     assert settings.agent_timeout_seconds == 120
     assert settings.agent_recursion_limit == 30
@@ -72,4 +76,26 @@ def test_invalid_agent_backend_is_rejected(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENT_BACKEND", "unknown")
 
     with pytest.raises(CorpusConfigError, match="AGENT_BACKEND"):
+        load_settings(tmp_path)
+
+
+def test_pipeline_codex_model_falls_back_to_codex_model(tmp_path, monkeypatch):
+    _write_corpus(tmp_path, {"marker_dir": "data/marker", "documents_file": "documents.yaml"})
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PIPELINE_BACKEND", "codex")
+    monkeypatch.setenv("CODEX_MODEL", "account-supported-model")
+    monkeypatch.delenv("PIPELINE_CODEX_MODEL", raising=False)
+
+    settings = load_settings(tmp_path)
+
+    assert settings.pipeline_backend == "codex"
+    assert settings.pipeline_codex_model == "account-supported-model"
+
+
+def test_invalid_pipeline_backend_is_rejected(tmp_path, monkeypatch):
+    _write_corpus(tmp_path, {"marker_dir": "data/marker", "documents_file": "documents.yaml"})
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PIPELINE_BACKEND", "unknown")
+
+    with pytest.raises(CorpusConfigError, match="PIPELINE_BACKEND"):
         load_settings(tmp_path)

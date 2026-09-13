@@ -234,6 +234,14 @@ Full per-stage flag table: [REFERENCE.md §1](REFERENCE.md#1-cli).
 Run them in order; each is independently resumable (`--dry-run` shows what's left,
 `--only`/`--limit` scope a run, `--force` bypasses the resume check).
 
+Stages B–D use the OpenAI-compatible gateway by default. To run all three through the
+official Codex SDK and the cached ChatGPT login instead, set `PIPELINE_BACKEND=codex`,
+optionally set `PIPELINE_CODEX_MODEL`, and run `codex login` once. This mode does not
+need `API_KEY`. It defaults B/C to two parallel requests to use subscription allowance
+conservatively; `--workers N` remains an explicit override. Changing providers does not
+invalidate existing outputs automatically, so use `--force` when intentionally
+regenerating them with Codex.
+
 **Stage A diagnostics worth reading, not ignoring:** a paper reported with zero
 `reference` nodes is a likely sign its bibliography's `ListGroup` block didn't parse as
 expected — worth eyeballing. A paper reported with more than 60 pages is the same
@@ -333,7 +341,8 @@ something the validator proves.
 | `couldn't locate a corpus.yaml — pass --corpus PATH, set PAPERTRAIL_CORPUS, or run from inside (or below) a corpus directory` | No `--corpus`, no `PAPERTRAIL_CORPUS`/`KB_DIR`, and no `corpus.yaml` found walking up from `cwd`. |
 | `no corpus.yaml found at <path>` | `--corpus`/`PAPERTRAIL_CORPUS` pointed at a real directory that just doesn't contain a `corpus.yaml`. |
 | `Search index not found — run \`papertrail index\` first.` (MCP tools) | `kb.sqlite` doesn't exist yet at the resolved corpus's `data/` path — run Stage E. |
-| `API_KEY not found in .env` | Stage B/C (without `--frontmatter-only`)/D (without `--lint`) all require an API key; Stage A/E never do. |
+| `API_KEY not found in .env` | The default `PIPELINE_BACKEND=openai` requires an API key for B/C (except `--frontmatter-only`) and D (except `--lint`). Use `PIPELINE_BACKEND=codex` with `codex login` instead, or configure the gateway key. |
+| `Codex is not signed in` | Run `codex login` (or `codex login --device-auth` on a headless host), then retry the pipeline command. |
 | `TaxonomyConfigError: duplicate slug_prefix among topic_pages facets: {...}` | Two `topic_pages: true` facets share a `slug_prefix` — give one a distinct value. |
 | `TaxonomyConfigError: navigation.tree_facet '...' is not a declared taxonomy facet` | `navigation.tree_facet` (or a `table_columns` entry) names something not under `taxonomy:`. |
 | `TaxonomyConfigError: navigation.digest_headings references heading(s) not in wiki_headings: [...]` | A digest heading was renamed/removed in `wiki_headings` without updating `navigation.digest_headings`. |

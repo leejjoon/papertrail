@@ -22,7 +22,7 @@ src/papertrail/
     search.py       FTS5/BM25 (search_nodes for chat, run_search/paper_filters_sql for MCP)
     schema.py       sole owner of all SQLite DDL
   pipeline/       imports core + leaf modules; never web/ or mcp/
-    llm.py           one place that constructs the OpenAI-compatible client
+    llm.py           provider-neutral OpenAI-compatible/Codex generation seam
     sections.py      Stage A
     classify.py      Stage B
     paper_pages.py   Stage C

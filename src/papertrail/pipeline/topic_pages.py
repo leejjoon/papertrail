@@ -42,7 +42,7 @@ from ..core.nodes import iter_leaves
 from ..identity import load_citation_style
 from ..taxonomy import FacetSpec, topic_page_facets
 from ..textutils import slugify
-from .llm import get_client
+from .llm import get_client_or_exit
 
 RETRIES = 3   # 4 total attempts — same lesson as kb/paper_pages.py: large
               # topic groups (dozens of member papers, wide citation pools)
@@ -76,6 +76,28 @@ def load_wiki_page(settings: Settings, doc_id: str) -> tuple[str, dict] | None:
 
 
 MARKER_RE = re.compile(r"\[(\d+)\]")
+
+TOPIC_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "prose": {"type": "string"},
+        "citations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "integer", "minimum": 1},
+                    "doc_id": {"type": "string"},
+                    "node_id": {"type": "string"},
+                },
+                "required": ["id", "doc_id", "node_id"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["prose", "citations"],
+    "additionalProperties": False,
+}
 
 
 def extract_section(body: str, heading: str) -> str:
@@ -142,7 +164,7 @@ def build_topic_prompt(settings: Settings, kind: str, name: str, digests: list[s
     user = (
         f"# Topic: {kind} = \"{name}\" — {len(digests)} papers\n\n"
         f"# Paper digests\n\n" + "\n\n".join(digests) + "\n\n"
-        f"# Citable node pool (cite ONLY these (doc_id, node_id) pairs)\n" +
+        "# Citable node pool (cite ONLY these (doc_id, node_id) pairs)\n" +
         "\n".join(pool_lines)
     )
     return system, user
@@ -237,16 +259,22 @@ def synthesize_topic(settings: Settings, client, kind: str, name: str, member_do
     last_error = None
     for attempt in range(RETRIES + 1):
         max_tokens = 8000 * (2 ** attempt)  # 8000, 16000, 32000, 64000
-        resp = client.chat.completions.create(
+        attempt_user = user
+        if last_error:
+            attempt_user += (
+                "\n\n# Correction required\nYour previous result failed validation: "
+                f"{last_error}. Return a complete corrected replacement."
+            )
+        text = client.generate(
             model=settings.synth_model,
-            messages=[{"role": "system", "content": system},
-                      {"role": "user", "content": user}],
+            system=system,
+            user=attempt_user,
+            output_schema=TOPIC_OUTPUT_SCHEMA,
             max_tokens=max_tokens,
             # SYNTH_MODEL (an Opus-tier model on this gateway) rejects a
             # temperature param on some routes — omit it, matching kasi's
             # documented workaround for the same issue.
         )
-        text = resp.choices[0].message.content or ""
         result = parse_response(text)
         if result is not None:
             error = validate_topic(result, valid_pairs)
@@ -281,10 +309,11 @@ def member_table(member_docs: list[dict], taxonomy: dict[str, FacetSpec], table_
 def write_topic_page(settings: Settings, slug: str, kind: str, name: str, title: str,
                       prose_or_none: str, member_docs: list[dict], model: str,
                       taxonomy: dict[str, FacetSpec], table_columns: list[str],
-                      citations: list[dict] | None = None) -> None:
+                      citations: list[dict] | None = None, backend: str = "openai") -> None:
     fm = {"title": title, "kind": kind, "paper_count": len(member_docs),
           "generator": {"model": model}}
     if model != "programmatic":
+        fm["generator"]["backend"] = backend
         fm["generator"]["generated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     fm_yaml = yaml.safe_dump(fm, sort_keys=False, allow_unicode=True)
     body = prose_or_none or f"{len(member_docs)} papers in this corpus fall under {kind} \"{name}\"."
@@ -352,15 +381,23 @@ def build_index(settings: Settings, client, all_docs: list[dict], groups_by_face
         system = prompts.render(settings.corpus, "index_intro.system")
         user = (f"# Corpus stats\n{yaml.safe_dump(stats, sort_keys=False)}\n\n"
                 f"# Representative paper digests\n\n" + "\n\n".join(digests) + "\n\n"
-                f"# Citable node pool\n" + "\n".join(pool_lines))
+                "# Citable node pool\n" + "\n".join(pool_lines))
         last_error = None
         for attempt in range(RETRIES + 1):
-            resp = client.chat.completions.create(
+            attempt_user = user
+            if last_error:
+                attempt_user += (
+                    "\n\n# Correction required\nYour previous result failed validation: "
+                    f"{last_error}. Return a complete corrected replacement."
+                )
+            text = client.generate(
                 model=settings.synth_model,
-                messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+                system=system,
+                user=attempt_user,
+                output_schema=TOPIC_OUTPUT_SCHEMA,
                 max_tokens=3000 * (2 ** attempt),
             )
-            result = parse_response(resp.choices[0].message.content or "")
+            result = parse_response(text)
             if result and not validate_topic(result, valid_pairs):
                 prose, citations = result["prose"], result["citations"]
                 break
@@ -428,9 +465,6 @@ def run(settings: Settings, args) -> None:
     if args.lint:
         sys.exit(0 if lint(settings) else 1)
 
-    if not settings.api_key:
-        sys.exit("API_KEY not found in .env")
-
     taxonomy = settings.corpus.taxonomy
     nav = settings.corpus.navigation
     facets = topic_page_facets(taxonomy)
@@ -470,7 +504,7 @@ def run(settings: Settings, args) -> None:
         print("  [dry-run] index.md")
         return
 
-    client = get_client(settings)
+    client = get_client_or_exit(settings)
     style = load_citation_style(settings.corpus)
     failed = []
     thin_report = {}
@@ -483,8 +517,8 @@ def run(settings: Settings, args) -> None:
             failed.append(slug)
             continue
         write_topic_page(settings, slug, spec.slug_prefix, name, f"{spec.label}: {name}",
-                          result["prose"], members, settings.synth_model, taxonomy, nav.table_columns,
-                          result["citations"])
+                          result["prose"], members, client.model_label(settings.synth_model),
+                          taxonomy, nav.table_columns, result["citations"], client.backend)
         mentions = find_uncited_author_year_mentions(result["prose"], style)
         if mentions:  # non-fatal report only — see kb/paper_pages.py's thin_signals docstring
             thin_report[slug] = mentions
@@ -501,7 +535,7 @@ def run(settings: Settings, args) -> None:
     for f in failed:
         print(f"  FAILED {f}")
     if thin_report:
-        print(f"\nPossible uncited/loosely-cited mentions (non-fatal, worth a spot-check):")
+        print("\nPossible uncited/loosely-cited mentions (non-fatal, worth a spot-check):")
         for slug, mentions in thin_report.items():
             print(f"  {slug}: {mentions}")
 

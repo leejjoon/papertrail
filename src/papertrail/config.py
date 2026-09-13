@@ -183,6 +183,8 @@ class Settings:
     bulk_model: str
     synth_model: str
     chat_model: str
+    pipeline_backend: str
+    pipeline_codex_model: str
     agent_backend: str
     agent_model: str
     agent_mcp_url: str
@@ -263,6 +265,12 @@ def load_settings(corpus_root: str | Path | None = None, *, create_dirs: bool = 
         raise CorpusConfigError(
             "AGENT_BACKEND must be either 'langchain' or 'codex'"
         )
+    pipeline_backend = os.getenv("PIPELINE_BACKEND", "openai").strip().lower()
+    if pipeline_backend not in {"openai", "codex"}:
+        raise CorpusConfigError(
+            "PIPELINE_BACKEND must be either 'openai' or 'codex'"
+        )
+    codex_model = os.getenv("CODEX_MODEL", "")
     return Settings(
         corpus_root=root,
         data_dir=data_dir,
@@ -276,12 +284,14 @@ def load_settings(corpus_root: str | Path | None = None, *, create_dirs: bool = 
         bulk_model=os.getenv("BULK_MODEL", "deepseek/deepseek-v4-flash-0731"),
         synth_model=os.getenv("SYNTH_MODEL", "anthropic/claude-opus-4.8"),
         chat_model=chat_model,
+        pipeline_backend=pipeline_backend,
+        pipeline_codex_model=os.getenv("PIPELINE_CODEX_MODEL", "") or codex_model,
         agent_backend=agent_backend,
         agent_model=os.getenv("AGENT_MODEL", chat_model),
         agent_mcp_url=os.getenv("AGENT_MCP_URL", "http://127.0.0.1:8013/mcp"),
         agent_timeout_seconds=float(os.getenv("AGENT_TIMEOUT_SECONDS", "120")),
         agent_recursion_limit=int(os.getenv("AGENT_RECURSION_LIMIT", "30")),
-        codex_model=os.getenv("CODEX_MODEL", ""),
+        codex_model=codex_model,
         codex_bin=os.getenv("CODEX_BIN", ""),
         corpus=Corpus(root=root, raw=raw),
     )

@@ -34,7 +34,7 @@ from ..core.nodes import iter_leaves
 from ..identity import CitationStyle, DocRef, load_citation_style
 from ..taxonomy import FacetSpec, heading_entries, topic_page_facets
 from ..textutils import slugify
-from .llm import get_client
+from .llm import get_client_or_exit, worker_count
 
 RETRIES = 3   # 4 total attempts — citation-heavy papers (100+ citations) need more
               # headroom than kb/classify.py's coarse tags did; see max_tokens below
@@ -122,6 +122,27 @@ def parse_response(text: str) -> dict | None:
 
 CITATION_MARKER_RE = re.compile(r"\[(\d+)\]")
 
+PAGE_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "body_markdown": {"type": "string"},
+        "citations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "integer", "minimum": 1},
+                    "node_id": {"type": "string"},
+                },
+                "required": ["id", "node_id"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["body_markdown", "citations"],
+    "additionalProperties": False,
+}
+
 
 def validate(result: dict, headings: list[str], valid_node_ids: set[str]) -> str | None:
     if not isinstance(result, dict):
@@ -195,14 +216,20 @@ def generate_page(client, model: str, doc_id: str, system: str, title: str, meta
                                               # cited papers (100+ citations),
                                               # not just reasoning-token
                                               # exhaustion
-        resp = client.chat.completions.create(
+        attempt_user = user
+        if last_error:
+            attempt_user += (
+                "\n\n# Correction required\nYour previous result failed validation: "
+                f"{last_error}. Return a complete corrected replacement."
+            )
+        text = client.generate(
             model=model,
-            messages=[{"role": "system", "content": system},
-                      {"role": "user", "content": user}],
+            system=system,
+            user=attempt_user,
+            output_schema=PAGE_OUTPUT_SCHEMA,
             temperature=0.2,
             max_tokens=max_tokens,
         )
-        text = resp.choices[0].message.content or ""
         result = parse_response(text)
         if result is not None:
             error = validate(result, heading_names, valid_node_ids)
@@ -275,7 +302,7 @@ def links_footer(classification: dict, related: list[dict], ref: DocRef, all_pap
 
 def front_matter(paper: dict, classification: dict, related: list[dict],
                   fulltext_source: str, model: str, taxonomy: dict[str, FacetSpec],
-                  prompt_version: str) -> str:
+                  prompt_version: str, backend: str = "openai") -> str:
     fm = {
         "doc_id": paper["doc_id"],
         "title": paper["title"],
@@ -288,7 +315,7 @@ def front_matter(paper: dict, classification: dict, related: list[dict],
         fm[facet] = classification.get(facet) or ([] if spec.multi else None)
     fm["related_papers"] = related
     fm["generator"] = {
-        "model": model, "prompt_version": prompt_version,
+        "backend": backend, "model": model, "prompt_version": prompt_version,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
     return yaml.safe_dump(fm, sort_keys=False, allow_unicode=True)
@@ -309,8 +336,11 @@ def page_prompt_version(settings: Settings, doc_id: str) -> str | None:
 
 def write_page(settings: Settings, doc_id: str, paper: dict, classification: dict, page: dict,
                 related: list[dict], fulltext_source: str, all_papers_by_id: dict, model: str,
-                style: CitationStyle, taxonomy: dict[str, FacetSpec], prompt_version: str) -> None:
-    fm = front_matter(paper, classification, related, fulltext_source, model, taxonomy, prompt_version)
+                style: CitationStyle, taxonomy: dict[str, FacetSpec], prompt_version: str,
+                backend: str = "openai") -> None:
+    fm = front_matter(
+        paper, classification, related, fulltext_source, model, taxonomy, prompt_version, backend
+    )
     ref = DocRef(doc_id=paper["doc_id"], native_id=paper.get("native_id"), title=paper.get("title", ""),
                 authors=paper.get("authors") or "", year=paper.get("year"),
                 journal=paper.get("journal") or "", extra=paper.get("extra") or {})
@@ -373,7 +403,8 @@ def rewrite_frontmatter_only(settings: Settings, doc_id: str, paper: dict, class
     related = related_papers(doc_id, classification, all_classifications, taxonomy)
     fulltext_source = paper.get("fulltext_source") or "publisher_pdf"
     write_page(settings, doc_id, paper, classification, {"body_markdown": body, "citations": None},
-              related, fulltext_source, all_papers_by_id, model, style, taxonomy, prompt_version)
+              related, fulltext_source, all_papers_by_id, model, style, taxonomy, prompt_version,
+              settings.pipeline_backend)
     return None
 
 
@@ -397,7 +428,8 @@ def process_paper(settings: Settings, client, doc_id: str, paper: dict, classifi
     related = related_papers(doc_id, classification, all_classifications, taxonomy)
     fulltext_source = paper.get("fulltext_source", "publisher_pdf")
     write_page(settings, doc_id, paper, classification, page, related, fulltext_source,
-               papers_by_id, settings.bulk_model, style, taxonomy, prompt_version)
+               papers_by_id, client.model_label(settings.bulk_model), style, taxonomy,
+               prompt_version, client.backend)
     return doc_id, None, thin_headings
 
 
@@ -408,7 +440,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--only", metavar="DOC_ID")
     parser.add_argument("--limit", type=int)
-    parser.add_argument("--workers", type=int, default=5)
+    parser.add_argument(
+        "--workers", type=int, default=None,
+        help="parallel requests (default: 5 for openai, 2 for codex)",
+    )
     parser.add_argument("--frontmatter-only", action="store_true")
     parser.add_argument("--regenerate-if-prompt-changed", action="store_true")
     return parser
@@ -478,9 +513,6 @@ def run(settings: Settings, args) -> None:
         _run_frontmatter_only(settings, args, papers_by_id, all_classifications)
         return
 
-    if not settings.api_key:
-        sys.exit("API_KEY not found in .env")
-
     headings_raw = settings.corpus.raw["wiki_headings"]
     heading_names = [e["name"] for e in heading_entries(headings_raw)]
     system = build_system_prompt(settings, headings_raw)
@@ -521,12 +553,13 @@ def run(settings: Settings, args) -> None:
     if not todo:
         return
 
-    client = get_client(settings)
+    client = get_client_or_exit(settings)
+    workers = worker_count(settings, args.workers, 5)
     style = load_citation_style(settings.corpus)
     taxonomy = settings.corpus.taxonomy
     failed = []
     thin_report = {}
-    with ThreadPoolExecutor(max_workers=args.workers) as executor:
+    with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {
             executor.submit(process_paper, settings, client, doc_id, papers_by_id[doc_id],
                              all_classifications[doc_id], all_classifications,
@@ -547,9 +580,9 @@ def run(settings: Settings, args) -> None:
     for d in failed:
         print(f"  FAILED {d}")
     if thin_report:
-        print(f"\nCitation signals (non-fatal — zero-citation headings are expected for a "
-              f"genuinely inapplicable section; uncited-mention hits have a real "
-              f"false-positive rate on long, correctly-cited sentences — spot-check both):")
+        print("\nCitation signals (non-fatal — zero-citation headings are expected for a "
+              "genuinely inapplicable section; uncited-mention hits have a real "
+              "false-positive rate on long, correctly-cited sentences — spot-check both):")
         for d, signals_list in thin_report.items():
             print(f"  {d}: {', '.join(signals_list)}")
 
