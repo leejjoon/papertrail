@@ -171,6 +171,7 @@ def build_tree(doc: dict, doc_id: str, assets_dir=None) -> list[dict]:
     root_nodes: list[dict] = []
     stack = [{"level": 0, "nodes": root_nodes}]
     pending_caption: dict | None = None
+    preceding_media: dict | None = None
 
     def next_id() -> str:
         return f"{next(counter):04d}"
@@ -186,13 +187,38 @@ def build_tree(doc: dict, doc_id: str, assets_dir=None) -> list[dict]:
             pending_caption = None
 
     def walk(children: list[dict]):
-        nonlocal pending_caption
+        nonlocal pending_caption, preceding_media
         for block in children:
             bt = block.get("block_type")
 
             if bt in RECURSE_TYPES:
+                preceding_media = None
                 walk(block.get("children") or [])
+                preceding_media = None
                 continue
+
+            if bt == "Caption":
+                caption = {
+                    "text": clean_inline(block.get("html") or ""),
+                    "page": block.get("page"), "block_id": block.get("id"),
+                }
+                if (preceding_media is not None
+                        and preceding_media.get("page") == caption["page"]):
+                    stack[-1]["nodes"].append({
+                        "node_id": next_id(), "kind": "leaf", "block_type": "caption",
+                        "caption_for": preceding_media["node_id"],
+                        "text": caption["text"], "page": caption["page"],
+                        "source_block_ids": [caption["block_id"]],
+                    })
+                    preceding_media = None
+                    continue
+                flush_pending_caption()  # a caption with no following table/figure
+                pending_caption = caption
+                continue
+
+            # Only an immediately following Caption belongs to this media node.
+            preceding_media = None
+
             if bt in DROP_TYPES:
                 flush_pending_caption()
                 continue
@@ -207,14 +233,6 @@ def build_tree(doc: dict, doc_id: str, assets_dir=None) -> list[dict]:
                         "level": level, "nodes": []}
                 stack[-1]["nodes"].append(node)
                 stack.append({"level": level, "nodes": node["nodes"]})
-                continue
-
-            if bt == "Caption":
-                flush_pending_caption()  # a caption with no following table/figure
-                pending_caption = {
-                    "text": clean_inline(block.get("html") or ""),
-                    "page": block.get("page"), "block_id": block.get("id"),
-                }
                 continue
 
             if bt in ("Table", "Figure"):
@@ -238,6 +256,8 @@ def build_tree(doc: dict, doc_id: str, assets_dir=None) -> list[dict]:
                 if caption_text:
                     node["caption"] = caption_text
                 stack[-1]["nodes"].append(node)
+                if caption_text is None:
+                    preceding_media = node
                 continue
 
             if bt == "Equation":

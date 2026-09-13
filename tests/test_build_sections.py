@@ -77,3 +77,40 @@ def test_dropped_block_types_produce_no_nodes(tmp_path):
     structure = bs.build_tree(data["json"], "listgroup_br", tmp_path)
     all_text = json.dumps(structure)
     assert "ignored" not in all_text  # the TableOfContents block's html
+
+
+def test_caption_after_figure_is_attached_to_that_figure(tmp_path):
+    doc = {"children": [{
+        "block_type": "Page",
+        "children": [
+            {
+                "id": "/page/6/Figure/1", "block_type": "Figure", "page": 6,
+                "html": '<img alt="Figure 7">', "images": {},
+            },
+            {
+                "id": "/page/6/Caption/2", "block_type": "Caption", "page": 6,
+                "html": "<p><b>Figure 7.</b> <math>K_s</math>-band light curve.</p>",
+            },
+            {
+                "id": "/page/6/Text/3", "block_type": "Text", "page": 6,
+                "html": "<p>Following discussion.</p>",
+            },
+        ],
+    }]}
+
+    structure = bs.build_tree(doc, "paper", tmp_path)
+
+    assert len(structure) == 3
+    assert structure[0]["block_type"] == "figure"
+    assert structure[0]["text"] == ""
+    assert structure[0]["source_block_ids"] == ["/page/6/Figure/1"]
+    assert structure[1] == {
+        "node_id": "0002",
+        "kind": "leaf",
+        "block_type": "caption",
+        "caption_for": "0001",
+        "text": "**Figure 7.** $K_s$-band light curve.",
+        "page": 6,
+        "source_block_ids": ["/page/6/Caption/2"],
+    }
+    assert structure[2]["text"] == "Following discussion."

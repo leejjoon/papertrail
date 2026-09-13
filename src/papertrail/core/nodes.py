@@ -1,7 +1,7 @@
 """Section-tree walkers: pure, I/O-free functions over the node model
 (container/leaf — see docs/spec/01_data_contracts.md), shared by
-core/registry.py, core/renderer.py, kb/mcp_server.py's get_section, and
-webapp/app/chat.py's context-escalation. Split out of registry.py in the
+core/registry.py, core/renderer.py, and the MCP server's get_section tool.
+Split out of registry.py in the
 papertrail extraction's Step 3 so core/renderer.py can import iter_nodes
 without a circular dependency on core/registry.py (it previously did a
 function-local `from .registry import iter_nodes` specifically to dodge
@@ -9,7 +9,7 @@ that cycle — no longer necessary now that neither module owns the walkers).
 """
 from __future__ import annotations
 
-from typing import Iterator
+from collections.abc import Iterator
 
 
 def iter_nodes(structure: list[dict]) -> Iterator[dict]:
@@ -22,7 +22,7 @@ def iter_nodes(structure: list[dict]) -> Iterator[dict]:
 
 
 def iter_leaves(structure: list[dict]) -> list[dict]:
-    """Every leaf node (paragraph/table/figure/equation/footnote/reference),
+    """Every leaf node (paragraph/table/figure/caption/equation/footnote/reference),
     depth-first, containers themselves excluded. <- kb/paper_pages.py's
     flatten_leaves, used by both Stage C (build_node_pool) and Stage D
     (node_text_for) — moved here so pipeline stages don't import from each
@@ -56,10 +56,8 @@ def find_node_with_siblings(structure: list[dict], node_id: str, parent_title: s
     `nodes`, or the top-level structure) and `index` its position there —
     lets a caller build a window of neighboring nodes (see context_window).
     Returns (None, None, None, None) if node_id isn't found. Pure/I/O-free:
-    shared by kb/mcp_server.py's get_section (agent tool-calling) and
-    webapp/app/chat.py's context-escalation (interactive chat) so both paths
-    use identical sibling-window semantics — each caller does its own tree
-    loading (kb/config vs webapp/config are independently overridable)."""
+    used by the MCP server's get_section (external and browser-agent tool
+    calling), with identical sibling-window semantics for both clients."""
     for i, n in enumerate(structure):
         if n["node_id"] == node_id:
             return n, parent_title, structure, i

@@ -70,8 +70,8 @@ They are genuinely not identical — sources: `pipeline/sections.py`
 | `--frontmatter-only` | — | — | ✓ | — | — |
 | `--lint` | — | — | — | ✓ | — |
 
-`mcp` takes only `--corpus` (added alongside this doc set — see the code-fix note in
-`DEVELOPERS_GUIDE.md` §7).
+`mcp` takes `--corpus`, plus `--transport {stdio,http,streamable-http}`, `--host`, and
+`--port`. CLI values override the corresponding MCP environment variables.
 
 **Per-flag semantics:**
 
@@ -175,10 +175,21 @@ Plain `os.getenv(name, default)` — no `PAPERTRAIL_` alias for these:
 | `BULK_MODEL` | `"deepseek/deepseek-v4-flash-0731"` |
 | `SYNTH_MODEL` | `"anthropic/claude-opus-4.8"` |
 | `CHAT_MODEL` | `"anthropic/claude-sonnet-5"` |
+| `AGENT_BACKEND` | `"langchain"` (`"codex"` is also supported) |
+| `AGENT_MODEL` | `CHAT_MODEL` |
+| `CODEX_MODEL` | `""` (use the Codex account/config default) |
+| `CODEX_BIN` | `""` (find `codex` on `PATH`, then fall back to the SDK runtime) |
+| `AGENT_MCP_URL` | `"http://127.0.0.1:8013/mcp"` |
+| `AGENT_TIMEOUT_SECONDS` | `"120"` |
+| `AGENT_RECURSION_LIMIT` | `"30"` |
 
 The three model defaults are literal gateway-specific model identifiers — they will 404
 against a stock OpenAI-compatible endpoint that doesn't recognize them. Set all three
 explicitly for your own gateway.
+
+`BASE_URL`, `API_KEY`, and `AGENT_MODEL` configure the `langchain` browser-chat
+backend. The `codex` backend instead reuses the official CLI/SDK login established by
+`codex login`; it does not consume `API_KEY`. `CODEX_MODEL` is optional.
 
 ### Other env vars, read elsewhere in the package
 
@@ -186,7 +197,7 @@ explicitly for your own gateway.
 |---|---|---|
 | `ROOT_PATH` | `web/asgi.py` | `""` |
 | `MCP_TRANSPORT` | `mcp/server.py` | `"stdio"` (`"http"` / `"streamable-http"` → Streamable HTTP) |
-| `MCP_HOST` | `mcp/server.py` | `"0.0.0.0"` |
+| `MCP_HOST` | `mcp/server.py` | `"127.0.0.1"` |
 | `MCP_PORT` | `mcp/server.py` | `"8000"` |
 | `WEBAPP_BASE_URL` | `mcp/server.py` (`publish_answer`'s returned URL) | `"http://127.0.0.1:8000"` |
 | `WEBAPP_TEST_PORT` | `tests/test_live_smoke.py` | `"8009"` |
@@ -195,7 +206,8 @@ explicitly for your own gateway.
 
 `Settings` (frozen dataclass): `corpus_root, data_dir, sections_dir, assets_dir,
 classification_dir, wiki_dir, sqlite_path, base_url, api_key, bulk_model, synth_model,
-chat_model, corpus`.
+chat_model, agent_backend, agent_model, agent_mcp_url, agent_timeout_seconds,
+agent_recursion_limit, codex_model, codex_bin, corpus`.
 
 `Corpus` (frozen dataclass): `root`, `raw` (the full parsed `corpus.yaml`). Properties:
 `name`, `title`, `glyph`, `description`, `taxonomy`, `navigation` (§3). Methods:
@@ -443,7 +455,7 @@ Source: `src/papertrail/web/app.py` (`create_app`). All routes are defined insid
 
 | Method | Path | Request | Response |
 |---|---|---|---|
-| GET | `/api/health` | — | `{status: "ok", corpus: <name>, doc_count: int}` |
+| GET | `/api/health` | — | `{status: "ok", corpus: <name>, doc_count: int, agent: {backend, status, model, auth}}`; agent status is `not_checked`, `ready`, `unavailable`, or `error` |
 | GET | `/api/corpus` | — | `{name, title, description, glyph, facets: {<facet>: {label, values, multi}}, navigation: {tree_facet, table_columns}}` |
 | POST | `/api/reload` | — | `{status: "ok", doc_count: int}` — drops registry caches and re-reads `kb.sqlite`/`corpus.yaml`; no process restart needed after a pipeline run |
 | GET | `/api/documents` | — | the left-nav doc tree, grouped by `navigation.tree_facet` |
@@ -469,20 +481,22 @@ baked into HTML, which uvicorn's own `--root-path` (routing/OpenAPI only) does n
 
 ### `/api/chat` SSE grammar
 
-Source: `src/papertrail/web/chat.py` (`stream_chat`). Each frame is `data: <json>\n\n`.
-Two kinds of event:
+Source: `src/papertrail/web/agent_chat.py` (`AgentChatService.stream_chat`). Each frame is
+`data: <json>\n\n`. Three kinds of event:
 
-- **Step**: `{"event": "step", "step": <name>, "status": "start"|"done"}`. Step names,
-  in emission order: `history`, `search` (its `done` frame adds `"hit_count": int`),
-  optionally `rewrite` (nested inside `search`, only if fewer than 3 hits), `answer`,
-  optionally `context` (the one-round context-escalation described in USERS_GUIDE.md),
-  `validate`.
+- **Step**: `{"event": "step", "step": <human-readable name>, "status":
+  "start"|"done"}`. The stream names connection, planning/correction, each MCP tool
+  call, and citation validation without exposing hidden reasoning or raw tool payloads.
 - **Terminal** (always exactly one, last frame): `{"event": "done", "answer_id": <id>,
   **enriched_payload}` — the enriched payload shape is §9's output shape.
+- **Error**: `{"event": "error", "code": <stable code>, "message": <safe message>}`.
+  Errors are not persisted. Codes currently include `agent_unavailable`,
+  `agent_timeout`, `research_limit`, `invalid_agent_output`, and `agent_failed`.
 
-Two degenerate paths still emit a well-formed terminal event: zero search hits (a canned
-"couldn't find anything" answer, empty `documents`/`warnings`), and an unparseable model
-response (`"The model's response could not be parsed"`).
+The agent gets at most one correction attempt. The backend requires every cited node to
+have been successfully read with `get_section` during that attempt, requires exact
+marker/citation-id agreement, then runs `validate_and_enrich(strict=True)` before any
+answer or message is stored.
 
 ---
 
@@ -527,8 +541,8 @@ a tool error (surfaced via pydantic validation), not silently ignored.
 ### Transport
 
 `MCP_TRANSPORT` default `"stdio"`. `"http"`/`"streamable-http"` → Streamable HTTP,
-stateless (`MCP_HOST`/`MCP_PORT`), since the tools are read-only and clients are
-short-lived.
+stateless (`MCP_HOST` default `127.0.0.1`, `MCP_PORT` default `8000`). The equivalent
+CLI flags take precedence. Browser chat conventionally uses port `8013`.
 
 `.mcp.json` shape:
 ```json
@@ -689,11 +703,7 @@ correctness question ("why 200 chars, why 3 sibling nodes") has one place to loo
 | `MAX_RELATED` | `5` | `pipeline/paper_pages.py` | Max entries in a paper page's `related_papers` list |
 | `MAX_ENUM_VALUES` | `30` | `mcp/server.py` | Above this many facet values, an MCP tool param degrades from a JSON-Schema enum to a free string |
 | author-year `mention_window` | `200` chars | `identity.py` (`AuthorYearStyle`) | Window after an author-year mention to look for an `[n]` marker (empirically calibrated on wasp12b: legitimate citations observed 100–345 chars downstream) |
-| chat search `limit` | `12` | `web/chat.py` | FTS hits retrieved per chat turn |
-| chat excerpt truncation | `1000` chars | `web/chat.py` | Default per-excerpt text shown to `CHAT_MODEL`, before any context escalation |
-| `MAX_CONTEXT_REQUESTS` | `4` | `web/chat.py` | `need_context` requests honored per escalation round |
-| `MAX_CONTEXT_WINDOW` | `3` | `web/chat.py` | Clamp on a single `need_context` request's sibling count |
-| `EXPANDED_CHAR_BUDGET` | `4000` | `web/chat.py` | Per-excerpt truncation after context expansion (vs. the default 1000) |
 | `get_fulltext` inline threshold | `20,000` chars | `mcp/server.py` | Below this, `get_fulltext` returns the whole doc; above it, a heading index + preview |
 | `get_fulltext` preview length | `8,000` chars | `mcp/server.py` | Preview shown when a doc exceeds the inline threshold |
-| history condensation | last `6` turns | `web/chat.py` | Verbatim turns included as chat context (no long-thread summarization pass exists) |
+| agent history | last `12` stored messages | `web/agent_chat.py` | User and final assistant text included as conversational context |
+| agent correction attempts | `1` | `web/agent_chat.py` | One fresh research attempt after a malformed, unread, or invalid citation payload |

@@ -30,7 +30,7 @@ src/papertrail/
     index.py         Stage E
   web/            imports core + leaf modules; never pipeline/ or mcp/
     app.py           create_app(settings, root_path) factory — all routes
-    chat.py           stream_chat() — the SSE-yielding RAG flow
+    agent_chat.py     AgentChatService — MCP tool loop, grounding, SSE, persistence
     asgi.py            module-level `app = create_app(...)`, the one sanctioned exception
                        to "nothing at import time" (see §2)
     static/index.html  packaged single-file SPA
@@ -167,8 +167,9 @@ node-pool contract that stage depends on.
 ## 5. Two data-flow traces
 
 **A citation's life.** Stage A assigns a `node_id` when it builds the section tree ⟶ the
-node pool (id + text preview) is shown to an LLM (Stage C's per-heading prompt, or
-chat's excerpt list) ⟶ the model emits an `[n]` marker plus a `{id, doc_id, node_id}`
+node pool (id + text preview) is shown to an LLM (Stage C's per-heading prompt), or the
+browser agent reads nodes through MCP ⟶ the model emits an `[n]` marker plus a
+`{id, doc_id, node_id}`
 citation entry ⟶ Stage C writes `<doc_id>.citations.json` alongside the wiki page; chat
 passes the raw payload straight to `validate_and_enrich()` ⟶ the validator resolves
 `(doc_id, node_id)` against the registry's `Doc.node_by_id`, checks `has_fulltext`, and
@@ -178,18 +179,18 @@ chip-injection code (a `TreeWalker` over the rendered HTML, skipping `CODE`/`PRE
 element ⟶ clicking it calls `GET /api/documents/{doc_id}/sections/{node_id}` to fetch and
 scroll to the exact node.
 
-**A chat request.** `POST /api/chat` calls `stream_chat()` (`web/chat.py`), which yields
-SSE step events as it goes (REFERENCE.md §6's grammar): condense the last 6 turns of
-history verbatim ⟶ FTS5 search, limit 12 ⟶ if fewer than 3 hits, one `BULK_MODEL` query
-rewrite and re-search ⟶ one `CHAT_MODEL` call with the excerpts ⟶ if the model asks for
-`need_context`, widen up to 4 of the already-shown excerpts by up to 3 sibling nodes each
-(bounded, exactly one round — never a new corpus fetch, never a loop) and re-call once ⟶
-if the answer contains an author-year mention with no nearby `[n]`, one bounded retry with
-an explicit instruction to fix it ⟶ `validate_and_enrich(strict=False)` ⟶ persist to
-`answers`/`messages` ⟶ final `{"event": "done", ...}` frame. Every one of the three
-retry/escalation points here is capped at exactly one round by design — this is not an
-open-ended agentic loop, and extending any of them past one round is a deliberate
-decision, not a bug fix.
+**A chat request.** `POST /api/chat` calls the service selected by
+`create_agent_chat_service()` (`web/agent_chat.py`). `AGENT_BACKEND=langchain` lazily
+discovers the existing MCP server's tools, keeps only targeted search, section-read, and
+figure-read tools, converts the last 12 stored messages to model context, and runs
+LangChain's LangGraph-backed `create_agent`. `AGENT_BACKEND=codex` runs an ephemeral
+official Codex SDK thread with the same Papertrail-only MCP allowlist and disables shell,
+web, general filesystem access, and persistent Codex history. Model/tool rounds are
+bounded by the selected backend and an overall timeout. Tool calls become sanitized SSE
+step events. The final structured payload must have exact marker/id agreement, and every
+cited `(doc_id, node_id)` must have been successfully fetched through `get_section` in
+that attempt. One correction attempt is allowed; then `validate_and_enrich(strict=True)`
+runs in trusted backend code and only a clean result is persisted.
 
 ## 6. Testing
 
@@ -203,7 +204,8 @@ python -m pytest tests/
 | `conftest.py` | Nothing functional — documents that tests import from the installed package (`pip install -e .`), no `sys.path` hacks needed |
 | `test_build_sections.py` | Stage A golden-file regression: 3 fixture Marker JSONs → tmpdir → byte-for-byte diff against committed expected JSON. Also covers figure-image extraction to an explicit `assets_dir` (never the real corpus), reference-node source-block-id sharing, unknown block types recursing defensively, dropped block types producing no nodes. |
 | `test_answer.py` | `validate_and_enrich` + `find_uncited_author_year_mentions`: citation enrichment, unknown doc_id (both the `offending` list and strict-mode raise), metadata-only doc rejected even with a real doc_id, unknown node_id, non-strict mode dropping offenders as warnings, missing/unused `[n]` marker warnings, the author-year heuristic (parametrized true/false-positive cases) and its window, and that `PlainStyle` disables the heuristic entirely. |
-| `test_registry_context.py` | `core/nodes.py`'s pure context-escalation helpers against a synthetic tree, no corpus load needed: leaf vs. top-level-container lookup, not-found, subtree concatenation, `context=0` prefixing with the parent title, expansion within a section with the cited node bracketed, clamping at section boundaries, container siblings contributing title only. These are the exact functions shared by MCP's `get_section(context=N)` and chat's `need_context`. |
+| `test_registry_context.py` | `core/nodes.py`'s pure context-escalation helpers against a synthetic tree, no corpus load needed: leaf vs. top-level-container lookup, not-found, subtree concatenation, `context=0` prefixing with the parent title, expansion within a section with the cited node bracketed, clamping at section boundaries, container siblings contributing title only. These are the semantics behind MCP's `get_section(context=N)`, used by browser and external agents. |
+| `test_agent_chat.py` | Browser-agent grounding rules, history conversion, provider selection, Codex tool lockdown/MCP auditing, strict persistence, one correction attempt, and terminal error behavior without a live model. |
 | `test_live_smoke.py` | Live HTTP smoke against a **running** webapp on `WEBAPP_TEST_PORT` (default 8009): health, documents, one document, search. Self-skips entirely if nothing answers on the port, so it stays green on a fresh clone or in CI with no server running. |
 | `fixtures/marker/*.json` / `fixtures/expected/*.json` | Input/expected pairs for the Stage A golden tests. |
 

@@ -29,7 +29,7 @@ PROMPT_SCHEMA_VERSION = "2"
 
 _KNOWN_TEMPLATES = {
     "classify.system", "paper_page.system", "topic_page.system",
-    "index_intro.system", "chat.system", "query_rewrite.user",
+    "index_intro.system", "agent.system",
 }
 
 

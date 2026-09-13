@@ -419,6 +419,9 @@ def build_server(settings: Settings) -> MCPServer:
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the papertrail MCP server.")
     parser.add_argument("--corpus", metavar="PATH")
+    parser.add_argument("--transport", choices=("stdio", "http", "streamable-http"))
+    parser.add_argument("--host")
+    parser.add_argument("--port", type=int)
     return parser
 
 
@@ -431,14 +434,14 @@ def main(argv=None) -> None:
     args = build_arg_parser().parse_args(argv)
     settings = load_settings(args.corpus)
     mcp = build_server(settings)
-    transport = os.getenv("MCP_TRANSPORT", "stdio")
+    transport = args.transport or os.getenv("MCP_TRANSPORT", "stdio")
     if transport in ("http", "streamable-http"):
         # For HTTP: bind host/port and run stateless (each request independent
         # — fits read-only tools + many short-lived clients, no session
         # bookkeeping), matching kasi_papers_analysis's rationale.
         mcp.run(transport="streamable-http",
-               host=os.getenv("MCP_HOST", "0.0.0.0"),
-               port=int(os.getenv("MCP_PORT", "8000")),
+               host=args.host or os.getenv("MCP_HOST", "127.0.0.1"),
+               port=args.port or int(os.getenv("MCP_PORT", "8000")),
                stateless_http=True)
     else:
         mcp.run(transport="stdio")

@@ -23,14 +23,14 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from ..config import Settings
 from . import schema
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 class Store:
@@ -75,6 +75,7 @@ class Store:
         conn = self._connect()
         try:
             conn.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
+            conn.execute("DELETE FROM answers WHERE conversation_id = ?", (conversation_id,))
             conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
             conn.commit()
         finally:

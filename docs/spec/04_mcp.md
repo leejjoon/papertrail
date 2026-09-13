@@ -107,7 +107,7 @@ tool.
 
 ### `publish_answer(payload: dict, title: str | None = None) -> dict`
 Calls `validate_answer` internally (an agent shouldn't be able to publish something
-that fails validation — no lenient path here, unlike chat's `strict=false`), then
+that fails validation — no lenient path here, like current browser chat), then
 inserts into `answers` (`kind="agent_adhoc"`, `conversation_id=NULL`). Returns
 `{id, url}` where `url` is the web app's `#answer=<id>` deep link. **No push** — the
 agent is responsible for telling its own user the URL (this is the standard

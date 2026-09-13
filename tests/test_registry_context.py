@@ -2,7 +2,7 @@
 
 find_node_with_siblings / concat_subtree / context_window are pure, I/O-free
 functions shared by kb/mcp_server.py's get_section(context=N) and
-webapp/app/chat.py's need_context escalation (see CLAUDE.md's citations
+the browser agent's MCP context expansion (see CLAUDE.md's citations
 section). Pinned here so the papertrail extraction can move them into
 core/nodes.py and prove byte-identical behavior against a synthetic tree
 rather than needing the real corpus loaded.

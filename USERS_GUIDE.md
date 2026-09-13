@@ -187,7 +187,7 @@ appears, only reference fields you're certain every doc supplies.
 
 Templates ship as package defaults under `src/papertrail/prompts/*.txt`, six files:
 `classify.system`, `paper_page.system`, `topic_page.system`, `index_intro.system`,
-`chat.system`, `query_rewrite.user`. Every one is `string.Template`-rendered with strict
+`agent.system`. Every one is `string.Template`-rendered with strict
 substitution — a template variable your corpus.yaml doesn't supply raises a `KeyError`
 immediately at generation time rather than silently emitting a literal `$var` into a paid
 LLM call.
@@ -274,6 +274,12 @@ that moment. If you run Stage A (which creates `assets_dir`) *after* the server 
 already started, figures 404 until you restart the process — `POST /api/reload` doesn't
 fix this particular case.
 
+The agent pill in the header reports the selected chat backend and its last observed
+state. Click it for the configured model, authentication type, corpus, and document
+count. `Not checked` immediately after startup is expected: Papertrail does not initiate
+an OAuth flow or model request merely to render the page. The pill refreshes after each
+chat request.
+
 ## 10. Running the MCP server
 
 ```
@@ -282,7 +288,8 @@ papertrail mcp --corpus /path/to/corpus
 or the equivalent `.mcp.json` registration (full shape in
 [REFERENCE.md §7](REFERENCE.md#7-mcp-tools)). Defaults to stdio transport;
 `MCP_TRANSPORT=http` runs a stateless Streamable-HTTP service instead
-(`MCP_HOST`/`MCP_PORT`). `WEBAPP_BASE_URL` controls the URL `publish_answer` hands back
+(`MCP_HOST`/`MCP_PORT`), or pass `--transport streamable-http --host ... --port ...`
+directly. `WEBAPP_BASE_URL` controls the URL `publish_answer` hands back
 to whatever agent called it — set it to wherever your web app is actually reachable, or
 published-answer links will point at the wrong place.
 
@@ -299,7 +306,8 @@ Two genuinely different checks happen on every answer payload — don't conflate
 
 1. **Every `[n]` marker used must resolve to a real `(doc_id, node_id)`.** Hard check;
    raises in strict mode (`validate_answer`/`publish_answer`), becomes a warning and gets
-   silently dropped in lenient mode (chat, `POST /api/answers?strict=false`).
+   silently dropped in lenient mode (`POST /api/answers?strict=false`). Browser chat
+   uses strict mode and refuses to persist an invalid result.
 2. **Every author-year mention should have an `[n]` nearby.** A heuristic, warnings only,
    never a hard gate — and entirely disabled under `PlainStyle`. It exists because check
    1 alone lets a real failure mode through: a model naming a study by author-year with
@@ -311,10 +319,10 @@ Two genuinely different checks happen on every answer payload — don't conflate
 **A resolving citation does not mean the cited text was read in enough context to
 support the claim beside it.** Retrieval is paragraph-granular; a single paragraph read
 alone is often ambiguous (an unresolved pronoun/comparison, a term whose exact meaning is
-paper-specific). Two escalation paths exist for this, both bounded to one round: MCP's
-`get_section(doc_id, node_id, context=N)` widens by `N` sibling nodes within the same
-section, and chat's `need_context` field does the equivalent automatically when the model
-asks for it. Neither `validate_and_enrich()` check above can catch "read out of context"
+paper-specific). MCP's `get_section(doc_id, node_id, context=N)` widens by `N` sibling
+nodes within the same section, and browser chat can call it repeatedly with larger context
+within the bounded agent run.
+Neither `validate_and_enrich()` check above can catch "read out of context"
 — that's a correctness question the citing agent (human or LLM) is responsible for, not
 something the validator proves.
 

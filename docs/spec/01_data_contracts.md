@@ -230,6 +230,18 @@ processes...` immediately precedes the `Table` block):
   "page": 3, "source_block_ids": ["/page/3/Caption/0", "/page/3/Table/0"] }
 ```
 
+Datalab may instead place a caption immediately *after* its figure or table. In
+that order, Stage A keeps the caption as its own searchable/citable leaf and
+links it back to the media node. Keeping a separate node also preserves the
+source block boundary; the HTML renderer presents the pair as one semantic
+`<figure>`/`<figcaption>` element.
+
+```json
+{ "node_id": "0077", "kind": "leaf", "block_type": "caption",
+  "caption_for": "0076", "text": "**Figure 7.** $K_s$-band light curve...",
+  "page": 6, "source_block_ids": ["/page/6/Caption/2"] }
+```
+
 ## Image assets
 
 `kb/data/assets/<doc_id>/<block_id_slug>.jpeg` — one file per `figure`-typed node.
@@ -397,7 +409,7 @@ CREATE TABLE nodes (
     doc_id TEXT NOT NULL REFERENCES docs(doc_id),
     node_id TEXT NOT NULL,        -- e.g. "0008" — unique within doc_id
     kind TEXT NOT NULL,           -- container | leaf
-    block_type TEXT,              -- paragraph|equation|table|figure|footnote|reference|NULL(container)
+    block_type TEXT,              -- paragraph|equation|table|figure|caption|footnote|reference|NULL(container)
     parent_title TEXT,            -- nearest enclosing container's title, for display/context
     page INTEGER,
     text TEXT NOT NULL,           -- container: its own title; leaf: its content

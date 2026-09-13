@@ -183,6 +183,13 @@ class Settings:
     bulk_model: str
     synth_model: str
     chat_model: str
+    agent_backend: str
+    agent_model: str
+    agent_mcp_url: str
+    agent_timeout_seconds: float
+    agent_recursion_limit: int
+    codex_model: str
+    codex_bin: str
     corpus: Corpus
 
 
@@ -250,6 +257,12 @@ def load_settings(corpus_root: str | Path | None = None, *, create_dirs: bool = 
                   wiki_dir, wiki_dir / "papers", wiki_dir / "topics"):
             d.mkdir(parents=True, exist_ok=True)
 
+    chat_model = os.getenv("CHAT_MODEL", "anthropic/claude-sonnet-5")
+    agent_backend = os.getenv("AGENT_BACKEND", "langchain").strip().lower()
+    if agent_backend not in {"langchain", "codex"}:
+        raise CorpusConfigError(
+            "AGENT_BACKEND must be either 'langchain' or 'codex'"
+        )
     return Settings(
         corpus_root=root,
         data_dir=data_dir,
@@ -262,6 +275,13 @@ def load_settings(corpus_root: str | Path | None = None, *, create_dirs: bool = 
         api_key=os.getenv("API_KEY", ""),
         bulk_model=os.getenv("BULK_MODEL", "deepseek/deepseek-v4-flash-0731"),
         synth_model=os.getenv("SYNTH_MODEL", "anthropic/claude-opus-4.8"),
-        chat_model=os.getenv("CHAT_MODEL", "anthropic/claude-sonnet-5"),
+        chat_model=chat_model,
+        agent_backend=agent_backend,
+        agent_model=os.getenv("AGENT_MODEL", chat_model),
+        agent_mcp_url=os.getenv("AGENT_MCP_URL", "http://127.0.0.1:8013/mcp"),
+        agent_timeout_seconds=float(os.getenv("AGENT_TIMEOUT_SECONDS", "120")),
+        agent_recursion_limit=int(os.getenv("AGENT_RECURSION_LIMIT", "30")),
+        codex_model=os.getenv("CODEX_MODEL", ""),
+        codex_bin=os.getenv("CODEX_BIN", ""),
         corpus=Corpus(root=root, raw=raw),
     )

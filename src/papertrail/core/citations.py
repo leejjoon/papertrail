@@ -1,8 +1,8 @@
 """Validate + enrich a supplied answer payload.
 
 Adapted from multi_doc_navigator/app/answer.py — the exact same seam, shared
-by POST /api/answers, kb/mcp_server.py's validate_answer/publish_answer, and
-(in the chat flow) the RAG endpoint's own citations before persisting. No
+by POST /api/answers, the MCP server's validate_answer/publish_answer, and
+the browser agent's citations before persisting. No
 model calls; pure lookups against the registry.
 
 Two additions over the navigator's version, per docs/spec/01_data_contracts.md:

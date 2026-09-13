@@ -39,8 +39,9 @@ output: [QUICKSTART.md](QUICKSTART.md).
 
 ## Three ways to read a corpus, once built
 
-- **A web app with chat** (`uvicorn papertrail.web.asgi:app`) — browse the doc tree,
-  search, ask questions with inline-cited streamed answers.
+- **A web app with agentic chat** (`papertrail serve`) — browse the doc tree, search,
+  and ask either a LangGraph- or Codex-backed agent that reads the corpus through MCP
+  before returning inline-cited answers.
 - **An MCP server** (`papertrail mcp`) — 9 tools giving a coding agent the same
   search/read access, plus the ability to draft an answer, validate every citation
   resolves, and publish it so it shows up in the web app with identical citation UX.
@@ -74,19 +75,20 @@ specific corpus's worth of surrounding context, not part of the package.
 ## Install
 
 ```bash
-pip install -e '.[web,mcp]'
+pip install -e '.[web,mcp,agent,codex]'
 ```
-`web` pulls in FastAPI/uvicorn (the web app); `mcp` pulls in the `mcp` SDK. Either extra
-alone works standalone (both need the core dependencies, which include `markdown` — see
-`pyproject.toml`'s inline comment for why it isn't just a `web`-extra dependency). `all`
-= both.
+`web` pulls in FastAPI/uvicorn, `mcp` pulls in the MCP SDK, and `agent` adds LangChain's
+LangGraph-backed agent plus its current MCP adapter. `codex` adds the official Codex SDK
+backend, which reuses an existing `codex login`; install only the chat backend you use.
+The reader/search portions work without either agent extra; chat reports an actionable
+unavailable error. `all` includes every optional feature.
 
 ## Status
 
 One real corpus (`corpora/wasp12b/`, ~210 papers, ~38,500 indexed nodes) and one
 deliberately-different proof corpus (`corpora/demo/`, 5 papers) both run end-to-end
-through every stage, served over both the web app and the MCP server. A characterization
-test suite (32 tests) covers Stage A's extraction algorithm, citation validation, and the
+through every stage, served over both the web app and the MCP server. The test suite
+covers Stage A's extraction algorithm, citation validation, agent grounding, and the
 context-escalation helpers — see [DEVELOPERS_GUIDE.md §6](DEVELOPERS_GUIDE.md#6-testing)
 for exactly what is and isn't covered. No packaged release exists yet (`version = "0.1.0"`
 in `pyproject.toml`, not published anywhere), and the package has not yet been split out

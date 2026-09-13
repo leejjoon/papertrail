@@ -28,7 +28,7 @@ from ..core.nodes import build_toc_outline
 from ..core.registry import CorpusRegistry, section_payload
 from ..core.search import search_nodes
 from ..core.store import Store
-from .chat import stream_chat
+from .agent_chat import create_agent_chat_service
 
 logging.basicConfig(level=logging.INFO)
 
@@ -43,11 +43,13 @@ def create_app(settings: Settings | None = None, root_path: str = "") -> FastAPI
     settings = settings or load_settings()
     registry = CorpusRegistry(settings, asset_prefix=f"{root_path}/assets")
     store = Store(settings)
+    agent_chat = create_agent_chat_service(settings)
 
     app = FastAPI(title=settings.corpus.title, root_path=root_path)
     app.state.settings = settings
     app.state.registry = registry
     app.state.store = store
+    app.state.agent_chat = agent_chat
 
     def _doc_or_404(doc_id: str):
         try:
@@ -58,7 +60,7 @@ def create_app(settings: Settings | None = None, root_path: str = "") -> FastAPI
     @app.get("/api/health")
     def health():
         return {"status": "ok", "corpus": settings.corpus.name,
-                "doc_count": len(registry.all_doc_ids())}
+                "doc_count": len(registry.all_doc_ids()), "agent": agent_chat.health()}
 
     @app.get("/api/corpus")
     def corpus_info():
@@ -173,8 +175,11 @@ def create_app(settings: Settings | None = None, root_path: str = "") -> FastAPI
         if not conversation_id or not question:
             raise HTTPException(status_code=400, detail="conversation_id and question are required")
 
-        def gen():
-            for event in stream_chat(settings, registry, store, conversation_id, question):
+        async def gen():
+            async for event in agent_chat.stream_chat(
+                    registry, store, conversation_id, question):
+                if await request.is_disconnected():
+                    break
                 yield _sse(event)
 
         return StreamingResponse(gen(), media_type="text/event-stream",

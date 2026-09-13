@@ -169,7 +169,7 @@ def headings_missing_citations(body: str, headings: list[str]) -> list[str]:
 def thin_signals(body: str, headings: list[str], style: CitationStyle) -> list[str]:
     """Non-fatal report combining zero-citation headings with the
     author-year-mention heuristic (core/citations.py) — the same "names a
-    study but the [n] is missing/too far away" check the chat flow uses,
+    study but the [n] is missing/too far away" check the browser agent uses,
     applied here as a report only (NOT a hard validation failure): unlike
     interactive chat, a batch job re-running this on every heuristic false
     positive risks real added cost with no guaranteed improvement, since the

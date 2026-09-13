@@ -1,1 +1,0 @@
-Rewrite this question as 5-8 search keywords (astronomy jargon, synonyms). Output only the keywords, space-separated: $question

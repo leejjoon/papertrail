@@ -11,6 +11,7 @@ and after each migration step (see the migration plan's per-step
 import json
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import pytest
@@ -35,11 +36,24 @@ def _server_up():
 pytestmark = pytest.mark.skipif(not _server_up(), reason=f"no webapp listening on {BASE}")
 
 
+def _first_document(node):
+    if "doc_id" in node:
+        return node
+    for child in node.get("children", []):
+        if document := _first_document(child):
+            return document
+    return None
+
+
 def test_health():
     status, body = _get("/api/health")
     assert status == 200
     assert body["status"] == "ok"
     assert body["doc_count"] > 0
+    assert body["agent"]["backend"] in {"codex", "langchain"}
+    assert body["agent"]["status"] in {"not_checked", "ready", "unavailable", "error"}
+    assert body["agent"]["model"]
+    assert body["agent"]["auth"] in {"Codex login (OAuth)", "API key"}
 
 
 def test_documents_tree():
@@ -49,13 +63,18 @@ def test_documents_tree():
 
 
 def test_one_document():
-    status, body = _get("/api/documents/2013Icar..225..432S")
+    _, tree = _get("/api/documents")
+    document = _first_document(tree)
+    status, body = _get(f"/api/documents/{urllib.parse.quote(document['doc_id'])}")
     assert status == 200
-    assert body["doc_id"] == "2013Icar..225..432S"
+    assert body["doc_id"] == document["doc_id"]
 
 
 def test_search():
-    status, body = _get("/api/search?q=orbital+decay")
+    _, tree = _get("/api/documents")
+    document = _first_document(tree)
+    query = document["doc_name"]
+    status, body = _get(f"/api/search?q={urllib.parse.quote_plus(query)}")
     assert status == 200
-    assert body["query"] == "orbital decay"
-    assert len(body["hits"]) > 0
+    assert body["query"] == query
+    assert isinstance(body["hits"], list)

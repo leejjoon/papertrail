@@ -1,14 +1,13 @@
 """FTS5/BM25 search over kb.sqlite's `nodes` table.
 
 Merged in papertrail migration Step 7: this used to be one of two
-hand-synced copies (this one for the web app's search box/chat, another in
+hand-synced copies (this one for the web app's search box, another in
 kb/mcp_server.py for the MCP `search_fulltext`/`list_papers` tools) —
 the doc_facets schema change forced editing both anyway, so `fts_escape`/
 `paper_filters_sql`/`run_search`/`format_hits` now live here once, imported
 by both consumers instead of duplicated.
 
-`search_nodes()` (web/chat path — no facet filters, richer per-row shape
-including full_text/parent_title for excerpt building) and `run_search()`
+`search_nodes()` (web path — no facet filters, richer per-row shape) and `run_search()`
 (MCP path — facet-filterable, terser per-row shape for markdown rendering)
 stay as two functions because they genuinely serve different callers with
 different needs; only the pieces that were byte-identical or

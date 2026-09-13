@@ -43,3 +43,33 @@ def test_documents_file_requires_doc_ids(tmp_path):
 
     with pytest.raises(CorpusConfigError, match="doc_id"):
         load_settings(tmp_path).corpus.load_papers()
+
+
+def test_agent_settings_default_to_chat_model_and_local_mcp(tmp_path, monkeypatch):
+    _write_corpus(tmp_path, {"marker_dir": "data/marker", "documents_file": "documents.yaml"})
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CHAT_MODEL", "gateway/tool-model")
+    monkeypatch.delenv("AGENT_MODEL", raising=False)
+    monkeypatch.delenv("AGENT_MCP_URL", raising=False)
+    monkeypatch.delenv("AGENT_BACKEND", raising=False)
+    monkeypatch.delenv("CODEX_MODEL", raising=False)
+    monkeypatch.delenv("CODEX_BIN", raising=False)
+
+    settings = load_settings(tmp_path)
+
+    assert settings.agent_model == "gateway/tool-model"
+    assert settings.agent_backend == "langchain"
+    assert settings.agent_mcp_url == "http://127.0.0.1:8013/mcp"
+    assert settings.agent_timeout_seconds == 120
+    assert settings.agent_recursion_limit == 30
+    assert settings.codex_model == ""
+    assert settings.codex_bin == ""
+
+
+def test_invalid_agent_backend_is_rejected(tmp_path, monkeypatch):
+    _write_corpus(tmp_path, {"marker_dir": "data/marker", "documents_file": "documents.yaml"})
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("AGENT_BACKEND", "unknown")
+
+    with pytest.raises(CorpusConfigError, match="AGENT_BACKEND"):
+        load_settings(tmp_path)

@@ -225,11 +225,10 @@ pronoun/comparison ("this discrepancy," "the equilibrium case"), or a paper-spec
 undefined in that node (e.g. what a paper's "C/O ratio" assumes). `validate_and_enrich()`
 only proves a citation resolves to a real node, never that its text supports the claim
 next to it. Two escalation paths exist: `get_section(doc_id, node_id, context=N)` widens
-with sibling nodes (agent tool-calling — `src/papertrail/mcp/server.py` now, the only
-copy that exists on disk; the connected MCP session is still running the deleted
-`kb/mcp_server.py`'s version from memory, per the nuance callout above); chat's
-`need_context` field does the same for the interactive path, bounded to one round. Both
-share `context_window()`'s sibling-window semantics, now `src/papertrail/core/nodes.py`
+with sibling nodes (agent tool-calling — `src/papertrail/mcp/server.py`, the only copy
+that exists on disk); browser chat connects to that same MCP server and can call
+`get_section` repeatedly within its bounded agent run. The tool uses `context_window()`'s
+sibling-window semantics, now `src/papertrail/core/nodes.py`
 (`webapp/app/registry.py`, the old home of this logic, was deleted in Step 9).
 
 ## Skills

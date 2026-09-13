@@ -10,11 +10,31 @@ The commands below use this repository's existing `.venv` exclusively.
 
 - Python 3.11 or newer in `.venv`.
 - `uv` available as the package installer.
-- A root `.env` containing a non-empty `DATALAB_API_KEY`:
+- A root `.env` containing the Datalab key and one chat backend configuration.
+  For an OpenAI-compatible gateway such as BizRouter:
 
 ```dotenv
 DATALAB_API_KEY=your-key-here
+BASE_URL=https://your-gateway.example/v1
+API_KEY=your-model-key
+# Optional; defaults to CHAT_MODEL and then Papertrail's built-in model name.
+AGENT_MODEL=your-tool-calling-model
+AGENT_BACKEND=langchain
 ```
+
+Or use your existing Codex login instead of a gateway API key:
+
+```dotenv
+DATALAB_API_KEY=your-key-here
+AGENT_BACKEND=codex
+# Optional; empty uses the model selected by your Codex account/configuration.
+CODEX_MODEL=
+```
+
+Authenticate once with `codex login` (or `codex login --device-auth` on a headless
+machine). Papertrail delegates login and token refresh to the official Codex SDK and
+does not read OAuth tokens itself. This mode is intended for a private, single-user
+reader; do not expose a subscription-authenticated server as a public multi-user API.
 
 Install Papertrail and its Datalab, web, and development dependencies into `.venv`:
 
@@ -104,15 +124,30 @@ This one command:
 Successful output for the included draft ends with:
 
 ```text
-Indexed: 1 full-text papers + 0 stub docs = 1 docs, 169 nodes, 0 facet rows
-Ready: V346draft_20260901 — 169 nodes, 69 references
+Indexed: 1 full-text papers + 0 stub docs = 1 docs, 172 nodes, 0 facet rows
+Ready: V346draft_20260901 — 172 nodes, 69 references
 ```
 
 The conversion is resumable. Re-running the same command with an unchanged PDF reuses
 the saved Marker JSON and does not spend another Datalab request. Use `--force` only
 when you intentionally want to reconvert it.
 
-## 4. Start the browser reader
+## 4. Start agentic chat and the browser reader
+
+Agentic chat uses the same Papertrail tools available to external MCP clients. Start
+the private MCP sidecar in one terminal; the browser agent itself allowlists only the
+targeted `search_fulltext`, `get_section`, and `get_figure_image` tools:
+
+```bash
+.venv/bin/papertrail mcp \
+  --corpus corpora/v346nor \
+  --transport streamable-http \
+  --host 127.0.0.1 \
+  --port 8013
+```
+
+Keep MCP bound to `127.0.0.1`; it does not need to be exposed to the network. In a
+second terminal, start the reader:
 
 ```bash
 .venv/bin/papertrail serve \
@@ -123,10 +158,22 @@ when you intentionally want to reconvert it.
 
 Open [http://127.0.0.1:8012](http://127.0.0.1:8012). Select the paper under the
 “(uncategorized)” group to browse its outline, rendered text, tables, equations, and
-figures. The search box queries the extracted section nodes; for example, search for
-`SiO jet`.
+figures. The search box queries extracted nodes; chat connects to MCP and lets the
+configured model search and read multiple sections before producing strictly validated,
+clickable citations. For example, ask `What evidence supports the candidate SiO jet?`
+The header's agent pill shows the configured backend and its last observed state. Click
+it to see the safe runtime details: model selection, authentication type, corpus, and
+document count. `Not checked` means no chat request has verified the backend and MCP
+connection since the reader process started.
 
-Keep the terminal running while using the browser. Stop the server with `Ctrl+C`.
+With `AGENT_BACKEND=codex`, each attempt uses an ephemeral, read-only Codex thread.
+Shell, web search, filesystem-image access, persistent Codex history, and every MCP tool
+except Papertrail's three allowlisted research tools are disabled. Set `CODEX_BIN` only
+if the `codex` executable is not on `PATH`; `CODEX_MODEL` is optional.
+
+Keep both terminals running while using chat. The reader and search remain available if
+MCP is stopped, but chat reports that its research tools are unavailable. Stop either
+server with `Ctrl+C`.
 
 ## 5. Generated artifacts
 
@@ -152,6 +199,12 @@ metadata remain trackable.
 | `not a readable PDF` | Confirm the path exists and the file begins with the PDF signature. |
 | Invalid `doc_id` | Use only letters, digits, `.`, `_`, `+`, and `-`, or omit it to use the filename stem. |
 | Search index is missing | Run `ingest-pdf` successfully, or run `.venv/bin/papertrail index --corpus PATH`. |
+| Chat says the research tools are unavailable | Start the MCP command from section 4 and confirm port 8013 is free. |
+| Chat cannot complete any question | Set `AGENT_MODEL` to a model that supports OpenAI-compatible tool calls and structured output through your gateway. |
+| Codex chat says it is not signed in | Run `codex login` (or `codex login --device-auth`), then restart `papertrail serve`. |
+| Codex dependencies are missing | Install them into the project environment with `uv pip install --python .venv/bin/python -e '.[codex]'`. |
+| Codex cannot find its runtime | Install the Codex CLI or set `CODEX_BIN` to its executable path. |
+| Agent times out | Ask a narrower question or raise `AGENT_TIMEOUT_SECONDS` from its 120-second default. |
 | Figures return 404 after ingestion | Restart `papertrail serve`; the asset mount is established when the server starts. |
 | Port 8012 is occupied | Choose another port and open that same port in the browser. |
 

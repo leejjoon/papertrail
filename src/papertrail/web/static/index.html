@@ -36,6 +36,28 @@
   header h1 { font-size: 15px; font-weight: 600; letter-spacing: 0.04em; margin: 0; color: #eaf2ff; }
   header h1 .glyph { color: var(--accent); margin-right: 8px; }
   header .spacer { flex: 1; }
+  .agent-runtime { position: relative; }
+  #agentStatus {
+    display: flex; align-items: center; gap: 6px; white-space: nowrap;
+    background: var(--bg-elev); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 999px; padding: 5px 9px; cursor: pointer; font-size: 12px;
+  }
+  #agentStatus:hover, #agentStatus:focus-visible { border-color: var(--accent); outline: none; }
+  .agent-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--fg-dim); }
+  #agentStatus[data-status="ready"] .agent-dot { background: #62d49b; }
+  #agentStatus[data-status="unavailable"] .agent-dot { background: var(--accent-2); }
+  #agentStatus[data-status="error"] .agent-dot { background: #ff6b7a; }
+  .agent-details {
+    position: absolute; right: 0; top: calc(100% + 8px); z-index: 30;
+    width: min(320px, calc(100vw - 36px)); padding: 12px 14px;
+    background: var(--bg-panel); border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5); font-size: 12px;
+  }
+  .agent-details[hidden] { display: none; }
+  .agent-details h2 { margin: 0 0 8px; color: #eaf2ff; font-size: 13px; }
+  .agent-detail-row { display: grid; grid-template-columns: 92px 1fr; gap: 10px; padding: 2px 0; }
+  .agent-detail-row .label { color: var(--fg-dim); }
+  .agent-detail-note { margin-top: 8px; color: var(--fg-dim); line-height: 1.4; }
   input#searchBox {
     background: var(--bg-elev); color: var(--fg); border: 1px solid var(--border);
     border-radius: 6px; padding: 6px 10px; width: 260px; font-size: 13px;
@@ -192,6 +214,24 @@
 <header>
   <h1><span class="glyph" id="corpusGlyph">✦</span><span id="corpusTitle">Knowledge Base</span></h1>
   <div class="spacer"></div>
+  <div class="agent-runtime">
+    <button id="agentStatus" type="button" data-status="not_checked"
+            aria-expanded="false" aria-controls="agentDetails">
+      <span class="agent-dot" aria-hidden="true"></span>
+      <span id="agentStatusText">Agent · Not checked</span>
+    </button>
+    <div class="agent-details" id="agentDetails" role="region"
+         aria-label="Agent runtime details" hidden>
+      <h2>Research agent</h2>
+      <div class="agent-detail-row"><span class="label">Backend</span><span id="agentBackend">—</span></div>
+      <div class="agent-detail-row"><span class="label">Status</span><span id="agentState">Not checked</span></div>
+      <div class="agent-detail-row"><span class="label">Model</span><span id="agentModel">—</span></div>
+      <div class="agent-detail-row"><span class="label">Authentication</span><span id="agentAuth">—</span></div>
+      <div class="agent-detail-row"><span class="label">Corpus</span><span id="agentCorpus">—</span></div>
+      <div class="agent-detail-row"><span class="label">Documents</span><span id="agentDocCount">—</span></div>
+      <div class="agent-detail-note">Not checked means no chat request has verified the agent since the server started.</div>
+    </div>
+  </div>
   <input type="text" id="searchBox" placeholder="Search papers…">
 </header>
 
@@ -253,7 +293,55 @@ const STATE = {
   activeConversationId: null,
   messages: [],          // active conversation's messages, enriched with payload
   answers: [],
+  chatBusy: false,
 };
+const AGENT_BACKEND_LABELS = { codex: "Codex", langchain: "LangGraph" };
+const AGENT_STATUS_LABELS = {
+  not_checked: "Not checked", ready: "Ready", unavailable: "Unavailable", error: "Error",
+};
+
+function renderAgentStatus(health) {
+  const agent = health.agent || {};
+  const backend = AGENT_BACKEND_LABELS[agent.backend] || agent.backend || "Agent";
+  const status = Object.hasOwn(AGENT_STATUS_LABELS, agent.status) ? agent.status : "error";
+  const statusLabel = AGENT_STATUS_LABELS[status];
+  const button = document.getElementById("agentStatus");
+  button.dataset.status = status;
+  document.getElementById("agentStatusText").textContent = `${backend} · ${statusLabel}`;
+  document.getElementById("agentBackend").textContent = backend;
+  document.getElementById("agentState").textContent = statusLabel;
+  document.getElementById("agentModel").textContent = agent.model || "—";
+  document.getElementById("agentAuth").textContent = agent.auth || "—";
+  document.getElementById("agentCorpus").textContent = health.corpus || "—";
+  document.getElementById("agentDocCount").textContent = String(health.doc_count ?? "—");
+}
+
+async function refreshAgentStatus() {
+  try {
+    const response = await fetch("/api/health", { cache: "no-store" });
+    if (!response.ok) throw new Error(`Health request failed (${response.status})`);
+    renderAgentStatus(await response.json());
+  } catch (_) {
+    renderAgentStatus({ agent: { status: "error" } });
+  }
+}
+
+function wireAgentStatus() {
+  const button = document.getElementById("agentStatus");
+  const panel = document.getElementById("agentDetails");
+  const close = () => { panel.hidden = true; button.setAttribute("aria-expanded", "false"); };
+  button.addEventListener("click", () => {
+    const opening = panel.hidden;
+    panel.hidden = !opening;
+    button.setAttribute("aria-expanded", String(opening));
+  });
+  document.addEventListener("click", (event) => {
+    if (!panel.hidden && !event.target.closest(".agent-runtime")) close();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !panel.hidden) { close(); button.focus(); }
+  });
+}
 function renderMath(el) {
   if (window.renderMathInElement) {
     try {
@@ -489,7 +577,7 @@ function buildTocList(nodes) {
   return ul;
 }
 function nodeBlock(nodeId) {
-  return document.querySelector(`#docView section[data-node-id="${CSS.escape(nodeId)}"]`);
+  return document.querySelector(`#docView [data-node-id="${CSS.escape(nodeId)}"]`);
 }
 // Element.scrollIntoView() walks every ancestor it considers a scroll
 // container and nudges each one, not just the one we actually want to move.
@@ -649,39 +737,56 @@ async function newConversation() {
 }
 async function sendMessage() {
   const input = document.getElementById("chatInput");
+  const sendBtn = document.getElementById("sendBtn");
   const question = input.value.trim();
-  if (!question || !STATE.activeConversationId) return;
+  if (!question || !STATE.activeConversationId || STATE.chatBusy) return;
+  STATE.chatBusy = true;
+  sendBtn.disabled = true;
+  input.disabled = true;
   input.value = "";
   STATE.messages.push({ role: "user", text: question });
   renderMessages();
 
   const stepEl = document.getElementById("stepIndicator");
   stepEl.textContent = "";
-  const resp = await fetch("/api/chat", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ conversation_id: STATE.activeConversationId, question }),
-  });
-  const reader = resp.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    const parts = buf.split("\n\n");
-    buf = parts.pop();
-    for (const part of parts) {
-      if (!part.startsWith("data: ")) continue;
-      const evt = JSON.parse(part.slice(6));
-      if (evt.event === "step") {
-        stepEl.textContent = `${evt.step}${evt.status === "done" ? " ✓" : "…"}`;
-      } else if (evt.event === "done") {
-        stepEl.textContent = "";
-        STATE.messages.push({ role: "assistant", payload: evt });
-        renderMessages();
-        updateTreeMarks();
+  try {
+    const resp = await fetch("/api/chat", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ conversation_id: STATE.activeConversationId, question }),
+    });
+    if (!resp.ok || !resp.body) throw new Error(`Chat request failed (${resp.status})`);
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const parts = buf.split("\n\n");
+      buf = parts.pop();
+      for (const part of parts) {
+        if (!part.startsWith("data: ")) continue;
+        const evt = JSON.parse(part.slice(6));
+        if (evt.event === "step") {
+          stepEl.textContent = `${evt.step}${evt.status === "done" ? " ✓" : "…"}`;
+        } else if (evt.event === "done") {
+          stepEl.textContent = "";
+          STATE.messages.push({ role: "assistant", payload: evt });
+          renderMessages();
+          updateTreeMarks();
+        } else if (evt.event === "error") {
+          stepEl.textContent = `⚠ ${evt.message}`;
+        }
       }
     }
+  } catch (err) {
+    stepEl.textContent = `⚠ ${err.message || "Chat request failed"}`;
+  } finally {
+    await refreshAgentStatus();
+    STATE.chatBusy = false;
+    sendBtn.disabled = false;
+    input.disabled = false;
+    input.focus();
   }
 }
 
@@ -829,6 +934,8 @@ function initLayout() {
     if (corpus.glyph) document.getElementById("corpusGlyph").textContent = corpus.glyph;
   } catch (e) { /* keep the neutral placeholder */ }
 
+  wireAgentStatus();
+  await refreshAgentStatus();
   initLayout();
   wireSearch();
   await loadDocumentTree();

@@ -41,7 +41,14 @@ mcp = [
     "mcp>=2.0,<3",
 ]
 datalab = ["requests>=2.31"]
-all = ["papertrail[web,mcp,datalab]"]
+agent = [
+    # create_agent is backed by LangGraph; the MCP extra supplies the current
+    # FastMCP-based adapter (the older langchain-mcp-adapters package is retired).
+    "langchain[mcp]>=1.4,<2",
+    "langchain-openai>=1.6,<2",
+]
+codex = ["openai-codex>=0.154,<0.155"]
+all = ["papertrail[web,mcp,datalab,agent,codex]"]
 dev = ["pytest>=8", "ruff"]
 
 [project.scripts]
