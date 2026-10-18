@@ -179,10 +179,12 @@ Plain `os.getenv(name, default)` — no `PAPERTRAIL_` alias for these:
 | `CHAT_MODEL` | `"anthropic/claude-sonnet-5"` |
 | `PIPELINE_BACKEND` | `"openai"` (`"codex"` is also supported) |
 | `PIPELINE_CODEX_MODEL` | `CODEX_MODEL`, then the Codex account default |
-| `AGENT_BACKEND` | `"langchain"` (`"codex"` is also supported) |
+| `AGENT_BACKEND` | `"langchain"` (`"codex"` and `"claude"` are also supported; this is the browser's default — the chat panel can pick another per question) |
 | `AGENT_MODEL` | `CHAT_MODEL` |
 | `CODEX_MODEL` | `""` (use the Codex account/config default) |
 | `CODEX_BIN` | `""` (find `codex` on `PATH`, then fall back to the SDK runtime) |
+| `CLAUDE_MODEL` | `""` (use the Claude Code account/config default model) |
+| `CLAUDE_BIN` | `""` (use the Claude Code CLI bundled with the Agent SDK) |
 | `AGENT_MCP_URL` | `"http://127.0.0.1:8013/mcp"` |
 | `AGENT_TIMEOUT_SECONDS` | `"120"` |
 | `AGENT_RECURSION_LIMIT` | `"30"` |
@@ -200,7 +202,14 @@ explicit `--workers` overrides either default.
 
 `BASE_URL`, `API_KEY`, and `AGENT_MODEL` configure the `langchain` browser-chat
 backend. The `codex` backend instead reuses the official CLI/SDK login established by
-`codex login`; it does not consume `API_KEY`. `CODEX_MODEL` is optional.
+`codex login`; it does not consume `API_KEY`. `CODEX_MODEL` is optional. The `claude`
+backend runs the Claude Agent SDK, which drives the Claude Code CLI as a subprocess and
+inherits its credential: the subscription login from `claude auth login`, or
+`ANTHROPIC_API_KEY` if that is set in the server's environment (then usage is API-billed).
+`CLAUDE_MODEL` and `CLAUDE_BIN` are optional. Papertrail never reads or stores either
+backend's tokens. Both subscription-backed modes are for a private, single-user reader;
+Anthropic's and OpenAI's terms do not allow routing other users' requests through a
+personal subscription.
 
 ### Other env vars, read elsewhere in the package
 
@@ -219,7 +228,7 @@ backend. The `codex` backend instead reuses the official CLI/SDK login establish
 classification_dir, wiki_dir, sqlite_path, base_url, api_key, bulk_model, synth_model,
 chat_model, pipeline_backend, pipeline_codex_model, agent_backend, agent_model,
 agent_mcp_url, agent_timeout_seconds, agent_recursion_limit, codex_model, codex_bin,
-corpus`.
+claude_model, claude_bin, corpus`.
 
 `Corpus` (frozen dataclass): `root`, `raw` (the full parsed `corpus.yaml`). Properties:
 `name`, `title`, `glyph`, `description`, `taxonomy`, `navigation` (§3). Methods:
@@ -467,7 +476,7 @@ Source: `src/papertrail/web/app.py` (`create_app`). All routes are defined insid
 
 | Method | Path | Request | Response |
 |---|---|---|---|
-| GET | `/api/health` | — | `{status: "ok", corpus: <name>, doc_count: int, agent: {backend, status, model, auth}}`; agent status is `not_checked`, `ready`, `unavailable`, or `error` |
+| GET | `/api/health` | — | `{status: "ok", corpus: <name>, doc_count: int, agent: {backend, status, model, auth}, default_backend, agent_backends: {<id>: {label, installed, backend, status, model, auth}}}`; `agent` is the default backend's health, `agent_backends` lists every selectable backend; status is `not_checked`, `ready`, `unavailable`, or `error` |
 | GET | `/api/corpus` | — | `{name, title, description, glyph, facets: {<facet>: {label, values, multi}}, navigation: {tree_facet, table_columns}}` |
 | POST | `/api/reload` | — | `{status: "ok", doc_count: int}` — drops registry caches and re-reads `kb.sqlite`/`corpus.yaml`; no process restart needed after a pipeline run |
 | GET | `/api/documents` | — | the left-nav doc tree, grouped by `navigation.tree_facet` |

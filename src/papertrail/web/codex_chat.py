@@ -21,38 +21,17 @@ from ..core.citations import InvalidCitationsError, validate_and_enrich
 from ..core.registry import CorpusRegistry
 from ..core.store import Store
 from .agent_chat import (
+    ANSWER_SCHEMA,
     READ_ONLY_TOOLS,
     TOOL_LABELS,
     AgentOutputError,
     AgentUnavailableError,
+    _format_input,
     _messages_from_history,
     validate_grounding,
 )
 
 log = logging.getLogger(__name__)
-
-ANSWER_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "answer": {"type": "string"},
-        "citations": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "id": {"type": "integer", "minimum": 1},
-                    "doc_id": {"type": "string"},
-                    "node_id": {"type": "string"},
-                },
-                "required": ["id", "doc_id", "node_id"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    "required": ["answer", "citations"],
-    "additionalProperties": False,
-}
-
 
 def codex_config_overrides(settings: Settings) -> tuple[str, ...]:
     """Build non-persistent Codex config that exposes only Papertrail research tools."""
@@ -128,16 +107,6 @@ def _successful_mcp_reads(items: list[Any]) -> tuple[set[tuple[str, str]], list[
         if isinstance(doc_id, str) and isinstance(node_id, str):
             reads.add((doc_id, node_id))
     return reads, labels
-
-
-def _format_input(messages: list[dict]) -> str:
-    lines = ["Answer the latest user question using the Papertrail MCP tools."]
-    if len(messages) > 1:
-        lines.append("\nRecent conversation context:")
-        for message in messages[:-1]:
-            lines.append(f"{message['role'].upper()}: {message['content']}")
-    lines.append(f"\nLATEST USER QUESTION: {messages[-1]['content']}")
-    return "\n".join(lines)
 
 
 class CodexAgentChatService:

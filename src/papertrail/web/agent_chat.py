@@ -39,6 +39,37 @@ TOOL_LABELS = {
 
 _MARKER_RE = re.compile(r"\[(\d+)\]")
 
+# The structured answer every backend must return (draft-07 JSON Schema, so the
+# Codex and Claude SDK validators both accept it).
+ANSWER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "answer": {"type": "string"},
+        "citations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "integer", "minimum": 1},
+                    "doc_id": {"type": "string"},
+                    "node_id": {"type": "string"},
+                },
+                "required": ["id", "doc_id", "node_id"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["answer", "citations"],
+    "additionalProperties": False,
+}
+
+# Selectable chat backends: id -> (UI label, importable packages its extra provides).
+AGENT_BACKENDS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "langchain": ("LangGraph", ("langchain", "langchain_openai")),
+    "codex": ("Codex", ("openai_codex",)),
+    "claude": ("Claude", ("claude_agent_sdk",)),
+}
+
 
 class AgentUnavailableError(RuntimeError):
     """The optional runtime or configured MCP service is unavailable."""
@@ -63,6 +94,9 @@ class AttemptState:
     read_nodes: set[tuple[str, str]] = field(default_factory=set)
     pending_calls: dict[str, tuple[str, dict]] = field(default_factory=dict)
     announced_calls: set[str] = field(default_factory=set)
+    # Used by backends whose stream reports terminal/auth failures as data.
+    failure: str | None = None
+    result_subtype: str | None = None
 
 
 def _as_dict(value: Any) -> dict | None:
@@ -87,6 +121,17 @@ def _messages_from_history(messages: list[dict]) -> list[dict]:
             if content:
                 out.append({"role": "assistant", "content": content})
     return out
+
+
+def _format_input(messages: list[dict]) -> str:
+    """Flatten model chat messages into one prompt for single-prompt SDK sessions."""
+    lines = ["Answer the latest user question using the Papertrail MCP tools."]
+    if len(messages) > 1:
+        lines.append("\nRecent conversation context:")
+        for message in messages[:-1]:
+            lines.append(f"{message['role'].upper()}: {message['content']}")
+    lines.append(f"\nLATEST USER QUESTION: {messages[-1]['content']}")
+    return "\n".join(lines)
 
 
 def validate_grounding(payload: dict, read_nodes: set[tuple[str, str]]) -> None:
@@ -350,10 +395,29 @@ class AgentChatService:
                    "message": "The research agent could not complete this question. Please try again."}
 
 
-def create_agent_chat_service(settings: Settings):
-    """Select the configured research backend without importing optional SDKs eagerly."""
-    if settings.agent_backend == "codex":
+def backend_installed(backend: str) -> bool:
+    """Whether the optional packages behind a backend are importable (no import side effects)."""
+    import importlib.util
+
+    _, packages = AGENT_BACKENDS[backend]
+    return all(importlib.util.find_spec(package) is not None for package in packages)
+
+
+def create_agent_chat_service(settings: Settings, backend: str | None = None):
+    """Build one research backend without importing optional SDKs eagerly.
+
+    ``backend`` defaults to ``settings.agent_backend``; the web app builds one
+    service per entry in ``AGENT_BACKENDS`` so a browser user can pick per request.
+    """
+    backend = backend or settings.agent_backend
+    if backend not in AGENT_BACKENDS:
+        raise ValueError(f"unknown agent backend: {backend!r}")
+    if backend == "codex":
         from .codex_chat import CodexAgentChatService
 
         return CodexAgentChatService(settings)
+    if backend == "claude":
+        from .claude_chat import ClaudeAgentChatService
+
+        return ClaudeAgentChatService(settings)
     return AgentChatService(settings)

@@ -36,6 +36,21 @@ machine). Papertrail delegates login and token refresh to the official Codex SDK
 does not read OAuth tokens itself. This mode is intended for a private, single-user
 reader; do not expose a subscription-authenticated server as a public multi-user API.
 
+Or use your Claude subscription through the Claude Agent SDK:
+
+```dotenv
+DATALAB_API_KEY=your-key-here
+AGENT_BACKEND=claude
+# Optional; empty uses the Claude Code account/config default model.
+CLAUDE_MODEL=
+```
+
+Install the `claude` extra and sign in once with `claude auth login`. The SDK runs its
+bundled Claude Code CLI and inherits that login (or `ANTHROPIC_API_KEY` if your shell
+exports one, in which case usage is API-billed). The same single-user caveat applies.
+Whichever backend you set as the default, the chat panel's dropdown lets you switch
+among all installed backends per question.
+
 Install Papertrail and its Datalab, web, and development dependencies into `.venv`:
 
 ```bash
@@ -171,6 +186,11 @@ Shell, web search, filesystem-image access, persistent Codex history, and every 
 except Papertrail's three allowlisted research tools are disabled. Set `CODEX_BIN` only
 if the `codex` executable is not on `PATH`; `CODEX_MODEL` is optional.
 
+With `AGENT_BACKEND=claude`, each attempt is a fresh Claude Agent SDK session with no
+built-in tools, no user or project settings, and only Papertrail's three research tools
+auto-approved (everything else is denied rather than prompted). `CLAUDE_MODEL` and
+`CLAUDE_BIN` are optional.
+
 The single-PDF workflow skips the LLM-backed B–D stages. If you later add taxonomy and
 wiki configuration and run the full pipeline, `PIPELINE_BACKEND=codex` also routes B,
 C, and D through the cached Codex login; it is independent of `AGENT_BACKEND`.
@@ -208,6 +228,8 @@ metadata remain trackable.
 | Codex chat says it is not signed in | Run `codex login` (or `codex login --device-auth`), then restart `papertrail serve`. |
 | Codex dependencies are missing | Install them into the project environment with `uv pip install --python .venv/bin/python -e '.[codex]'`. |
 | Codex cannot find its runtime | Install the Codex CLI or set `CODEX_BIN` to its executable path. |
+| Claude chat says it is not logged in | Run `claude auth login`, then restart `papertrail serve`. |
+| Claude Agent SDK is missing | Install it with `uv pip install --python .venv/bin/python -e '.[claude]'`. |
 | Agent times out | Ask a narrower question or raise `AGENT_TIMEOUT_SECONDS` from its 120-second default. |
 | Figures return 404 after ingestion | Restart `papertrail serve`; the asset mount is established when the server starts. |
 | Port 8012 is occupied | Choose another port and open that same port in the browser. |

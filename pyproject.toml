@@ -48,7 +48,10 @@ agent = [
     "langchain-openai>=1.6,<2",
 ]
 codex = ["openai-codex>=0.154,<0.155"]
-all = ["papertrail[web,mcp,datalab,agent,codex]"]
+# The Claude Agent SDK drives the locally installed Claude Code CLI; it inherits
+# whatever login that CLI has (subscription OAuth or ANTHROPIC_API_KEY).
+claude = ["claude-agent-sdk>=0.2.168,<0.3"]
+all = ["papertrail[web,mcp,datalab,agent,codex,claude]"]
 dev = ["pytest>=8", "ruff"]
 
 [project.scripts]

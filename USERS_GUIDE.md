@@ -282,6 +282,13 @@ that moment. If you run Stage A (which creates `assets_dir`) *after* the server 
 already started, figures 404 until you restart the process — `POST /api/reload` doesn't
 fix this particular case.
 
+The dropdown beside the Send button chooses which research agent answers the next
+question: LangGraph (an OpenAI-compatible gateway with `API_KEY`), Codex (your `codex
+login`), or Claude (your Claude Code login, `claude auth login`). The server's
+`AGENT_BACKEND` is preselected; backends whose extra is not installed are greyed out,
+and the choice is remembered in the browser. Every backend goes through the same
+read-before-cite validation, so answers from any of them carry the same guarantees.
+
 The agent pill in the header reports the selected chat backend and its last observed
 state. Click it for the configured model, authentication type, corpus, and document
 count. `Not checked` immediately after startup is expected: Papertrail does not initiate
@@ -343,6 +350,8 @@ something the validator proves.
 | `Search index not found — run \`papertrail index\` first.` (MCP tools) | `kb.sqlite` doesn't exist yet at the resolved corpus's `data/` path — run Stage E. |
 | `API_KEY not found in .env` | The default `PIPELINE_BACKEND=openai` requires an API key for B/C (except `--frontmatter-only`) and D (except `--lint`). Use `PIPELINE_BACKEND=codex` with `codex login` instead, or configure the gateway key. |
 | `Codex is not signed in` | Run `codex login` (or `codex login --device-auth` on a headless host), then retry the pipeline command. |
+| `Claude Code is not logged in` | Run `claude auth login` (or set `ANTHROPIC_API_KEY` for API billing), then restart `papertrail serve`. |
+| `Claude Agent SDK is not installed` | Install the `claude` extra: `uv pip install --python .venv/bin/python -e '.[claude]'`. |
 | `TaxonomyConfigError: duplicate slug_prefix among topic_pages facets: {...}` | Two `topic_pages: true` facets share a `slug_prefix` — give one a distinct value. |
 | `TaxonomyConfigError: navigation.tree_facet '...' is not a declared taxonomy facet` | `navigation.tree_facet` (or a `table_columns` entry) names something not under `taxonomy:`. |
 | `TaxonomyConfigError: navigation.digest_headings references heading(s) not in wiki_headings: [...]` | A digest heading was renamed/removed in `wiki_headings` without updating `navigation.digest_headings`. |

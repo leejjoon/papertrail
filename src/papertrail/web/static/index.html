@@ -146,6 +146,8 @@
   .step-indicator .step.done { color: var(--accent); }
   .chat-input-row { display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--border); flex: 0 0 auto; }
   #chatInput { flex: 1; background: var(--bg-elev); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 8px; font: inherit; resize: none; }
+  .chat-input-row .input-side { display: flex; flex-direction: column; gap: 6px; }
+  #agentSelect { background: var(--bg-elev); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; font: inherit; font-size: 12px; max-width: 120px; }
   .empty { color: var(--fg-dim); font-style: italic; padding: 10px; }
   .answers-list { overflow: auto; padding: 6px 12px; flex: 1 1 auto; }
   .answer-row { padding: 6px 8px; border-radius: 5px; cursor: pointer; font-size: 13px; }
@@ -264,7 +266,10 @@
         <div class="step-indicator" id="stepIndicator"></div>
         <div class="chat-input-row">
           <textarea id="chatInput" rows="2" placeholder="Ask about these papers…"></textarea>
-          <button class="action" id="sendBtn">Send</button>
+          <div class="input-side">
+            <select id="agentSelect" title="Research agent used for this question" aria-label="Research agent"></select>
+            <button class="action" id="sendBtn">Send</button>
+          </div>
         </div>
       </div>
       <div class="answers-list" id="answersBody" style="display:none;"></div>
@@ -294,14 +299,47 @@ const STATE = {
   messages: [],          // active conversation's messages, enriched with payload
   answers: [],
   chatBusy: false,
+  health: null,          // last /api/health payload
+  agentBackend: null,    // backend id selected for chat requests
 };
-const AGENT_BACKEND_LABELS = { codex: "Codex", langchain: "LangGraph" };
+const AGENT_BACKEND_LABELS = { codex: "Codex", langchain: "LangGraph", claude: "Claude" };
+const AGENT_BACKEND_STORAGE_KEY = "papertrail.agentBackend";
 const AGENT_STATUS_LABELS = {
   not_checked: "Not checked", ready: "Ready", unavailable: "Unavailable", error: "Error",
 };
 
+function selectedAgentHealth(health) {
+  // The pill describes the backend the user has selected for chat, falling
+  // back to the server's default (AGENT_BACKEND) when nothing is selected.
+  const backends = health.agent_backends || {};
+  if (STATE.agentBackend && backends[STATE.agentBackend]) return backends[STATE.agentBackend];
+  return health.agent || {};
+}
+function renderAgentSelect(health) {
+  const select = document.getElementById("agentSelect");
+  const backends = health.agent_backends || {};
+  const ids = Object.keys(backends);
+  if (!ids.length) { select.hidden = true; return; }
+  let saved = null;
+  try { saved = localStorage.getItem(AGENT_BACKEND_STORAGE_KEY); } catch (_) { /* storage blocked */ }
+  if (!STATE.agentBackend) STATE.agentBackend = (saved && backends[saved]) ? saved : health.default_backend;
+  if (!backends[STATE.agentBackend]) STATE.agentBackend = ids[0];
+  select.innerHTML = "";
+  ids.forEach((id) => {
+    const b = backends[id];
+    const opt = document.createElement("option");
+    opt.value = id;
+    opt.textContent = (b.label || AGENT_BACKEND_LABELS[id] || id) + (b.installed ? "" : " (not installed)");
+    opt.disabled = !b.installed;
+    select.appendChild(opt);
+  });
+  select.value = STATE.agentBackend;
+  select.hidden = false;
+}
 function renderAgentStatus(health) {
-  const agent = health.agent || {};
+  STATE.health = health;
+  if (health.agent_backends) renderAgentSelect(health);
+  const agent = selectedAgentHealth(health);
   const backend = AGENT_BACKEND_LABELS[agent.backend] || agent.backend || "Agent";
   const status = Object.hasOwn(AGENT_STATUS_LABELS, agent.status) ? agent.status : "error";
   const statusLabel = AGENT_STATUS_LABELS[status];
@@ -326,6 +364,13 @@ async function refreshAgentStatus() {
   }
 }
 
+function wireAgentSelect() {
+  document.getElementById("agentSelect").addEventListener("change", (event) => {
+    STATE.agentBackend = event.target.value;
+    try { localStorage.setItem(AGENT_BACKEND_STORAGE_KEY, STATE.agentBackend); } catch (_) { /* ignore */ }
+    if (STATE.health) renderAgentStatus(STATE.health);
+  });
+}
 function wireAgentStatus() {
   const button = document.getElementById("agentStatus");
   const panel = document.getElementById("agentDetails");
@@ -752,7 +797,8 @@ async function sendMessage() {
   try {
     const resp = await fetch("/api/chat", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ conversation_id: STATE.activeConversationId, question }),
+      body: JSON.stringify({ conversation_id: STATE.activeConversationId, question,
+                             backend: STATE.agentBackend || undefined }),
     });
     if (!resp.ok || !resp.body) throw new Error(`Chat request failed (${resp.status})`);
     const reader = resp.body.getReader();
@@ -935,6 +981,7 @@ function initLayout() {
   } catch (e) { /* keep the neutral placeholder */ }
 
   wireAgentStatus();
+  wireAgentSelect();
   await refreshAgentStatus();
   initLayout();
   wireSearch();

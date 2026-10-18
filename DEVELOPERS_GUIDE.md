@@ -179,13 +179,20 @@ chip-injection code (a `TreeWalker` over the rendered HTML, skipping `CODE`/`PRE
 element ⟶ clicking it calls `GET /api/documents/{doc_id}/sections/{node_id}` to fetch and
 scroll to the exact node.
 
-**A chat request.** `POST /api/chat` calls the service selected by
-`create_agent_chat_service()` (`web/agent_chat.py`). `AGENT_BACKEND=langchain` lazily
+**A chat request.** `POST /api/chat` picks one of the services built at startup by
+`create_agent_chat_service()` (`web/agent_chat.py`, one per `AGENT_BACKENDS` entry) from
+the request's optional `backend` field, defaulting to `AGENT_BACKEND`; constructors
+import no optional SDK, so an uninstalled backend costs nothing until it is selected.
+`AGENT_BACKEND=langchain` lazily
 discovers the existing MCP server's tools, keeps only targeted search, section-read, and
 figure-read tools, converts the last 12 stored messages to model context, and runs
 LangChain's LangGraph-backed `create_agent`. `AGENT_BACKEND=codex` runs an ephemeral
 official Codex SDK thread with the same Papertrail-only MCP allowlist and disables shell,
-web, general filesystem access, and persistent Codex history. Model/tool rounds are
+web, general filesystem access, and persistent Codex history. `AGENT_BACKEND=claude`
+(`web/claude_chat.py`) runs a fresh Claude Agent SDK session per attempt with
+`tools=[]`, `setting_sources=[]`, `permission_mode="dontAsk"`, and only the three
+Papertrail MCP tools in `allowed_tools`; it folds the SDK's streamed `ToolUseBlock`/
+`ToolResultBlock` pairs into the same read-before-cite bookkeeping. Model/tool rounds are
 bounded by the selected backend and an overall timeout. Tool calls become sanitized SSE
 step events. The final structured payload must have exact marker/id agreement, and every
 cited `(doc_id, node_id)` must have been successfully fetched through `get_section` in

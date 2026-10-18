@@ -192,6 +192,8 @@ class Settings:
     agent_recursion_limit: int
     codex_model: str
     codex_bin: str
+    claude_model: str
+    claude_bin: str
     corpus: Corpus
 
 
@@ -261,9 +263,9 @@ def load_settings(corpus_root: str | Path | None = None, *, create_dirs: bool = 
 
     chat_model = os.getenv("CHAT_MODEL", "anthropic/claude-sonnet-5")
     agent_backend = os.getenv("AGENT_BACKEND", "langchain").strip().lower()
-    if agent_backend not in {"langchain", "codex"}:
+    if agent_backend not in {"langchain", "codex", "claude"}:
         raise CorpusConfigError(
-            "AGENT_BACKEND must be either 'langchain' or 'codex'"
+            "AGENT_BACKEND must be one of 'langchain', 'codex', or 'claude'"
         )
     pipeline_backend = os.getenv("PIPELINE_BACKEND", "openai").strip().lower()
     if pipeline_backend not in {"openai", "codex"}:
@@ -293,5 +295,7 @@ def load_settings(corpus_root: str | Path | None = None, *, create_dirs: bool = 
         agent_recursion_limit=int(os.getenv("AGENT_RECURSION_LIMIT", "30")),
         codex_model=codex_model,
         codex_bin=os.getenv("CODEX_BIN", ""),
+        claude_model=os.getenv("CLAUDE_MODEL", ""),
+        claude_bin=os.getenv("CLAUDE_BIN", ""),
         corpus=Corpus(root=root, raw=raw),
     )

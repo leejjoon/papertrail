@@ -28,7 +28,7 @@ from ..core.nodes import build_toc_outline
 from ..core.registry import CorpusRegistry, section_payload
 from ..core.search import search_nodes
 from ..core.store import Store
-from .agent_chat import create_agent_chat_service
+from .agent_chat import AGENT_BACKENDS, backend_installed, create_agent_chat_service
 
 logging.basicConfig(level=logging.INFO)
 
@@ -43,13 +43,17 @@ def create_app(settings: Settings | None = None, root_path: str = "") -> FastAPI
     settings = settings or load_settings()
     registry = CorpusRegistry(settings, asset_prefix=f"{root_path}/assets")
     store = Store(settings)
-    agent_chat = create_agent_chat_service(settings)
+    # One lazy service per backend (constructors import no optional SDK); the
+    # browser picks one per request, defaulting to AGENT_BACKEND.
+    agent_chats = {name: create_agent_chat_service(settings, name) for name in AGENT_BACKENDS}
+    agent_chat = agent_chats[settings.agent_backend]
 
     app = FastAPI(title=settings.corpus.title, root_path=root_path)
     app.state.settings = settings
     app.state.registry = registry
     app.state.store = store
     app.state.agent_chat = agent_chat
+    app.state.agent_chats = agent_chats
 
     def _doc_or_404(doc_id: str):
         try:
@@ -59,8 +63,14 @@ def create_app(settings: Settings | None = None, root_path: str = "") -> FastAPI
 
     @app.get("/api/health")
     def health():
+        backends = {
+            name: {"label": AGENT_BACKENDS[name][0], "installed": backend_installed(name),
+                   **service.health()}
+            for name, service in agent_chats.items()
+        }
         return {"status": "ok", "corpus": settings.corpus.name,
-                "doc_count": len(registry.all_doc_ids()), "agent": agent_chat.health()}
+                "doc_count": len(registry.all_doc_ids()), "agent": agent_chat.health(),
+                "default_backend": settings.agent_backend, "agent_backends": backends}
 
     @app.get("/api/corpus")
     def corpus_info():
@@ -174,9 +184,13 @@ def create_app(settings: Settings | None = None, root_path: str = "") -> FastAPI
         question = body.get("question", "")
         if not conversation_id or not question:
             raise HTTPException(status_code=400, detail="conversation_id and question are required")
+        backend = body.get("backend") or settings.agent_backend
+        if backend not in agent_chats:
+            raise HTTPException(status_code=400, detail=f"unknown agent backend: {backend}")
+        service = agent_chats[backend]
 
         async def gen():
-            async for event in agent_chat.stream_chat(
+            async for event in service.stream_chat(
                     registry, store, conversation_id, question):
                 if await request.is_disconnected():
                     break

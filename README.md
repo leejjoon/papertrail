@@ -75,13 +75,16 @@ specific corpus's worth of surrounding context, not part of the package.
 ## Install
 
 ```bash
-pip install -e '.[web,mcp,agent,codex]'
+pip install -e '.[web,mcp,agent,codex,claude]'
 ```
 `web` pulls in FastAPI/uvicorn, `mcp` pulls in the MCP SDK, and `agent` adds LangChain's
 LangGraph-backed agent plus its current MCP adapter. `codex` adds the official Codex SDK
-backend, which reuses an existing `codex login`; install only the chat backend you use.
-The reader/search portions work without either agent extra; chat reports an actionable
-unavailable error. `all` includes every optional feature.
+backend, which reuses an existing `codex login`; `claude` adds the Claude Agent SDK
+backend, which reuses the Claude Code login (`claude auth login`, a Claude subscription)
+or `ANTHROPIC_API_KEY`. Install only the chat backends you use; the browser's chat panel
+lets you pick among the installed ones per question. The reader/search portions work
+without any agent extra; chat reports an actionable unavailable error. `all` includes
+every optional feature.
 
 ## Status
 
