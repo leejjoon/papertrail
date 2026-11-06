@@ -114,3 +114,163 @@ def test_caption_after_figure_is_attached_to_that_figure(tmp_path):
         "source_block_ids": ["/page/6/Caption/2"],
     }
     assert structure[2]["text"] == "Following discussion."
+
+
+def _text(block_id, page, html):
+    return {"id": block_id, "block_type": "Text", "page": page, "html": html}
+
+
+def _two_pages(first_page, second_page):
+    return {"children": [
+        {"block_type": "Page", "children": first_page},
+        {"block_type": "Page", "children": second_page},
+    ]}
+
+
+def test_paragraph_split_across_pages_is_merged(tmp_path):
+    """Marker flags a paragraph cut by a page break with
+    class='has-continuation'; the next Text block (past any page header or
+    footer) joins it in one node citing both source blocks."""
+    doc = _two_pages(
+        [_text("/page/0/Text/1", 0,
+               "<p block-type='Text' class='has-continuation'>The bands trace the</p>"),
+         {"id": "/page/0/PageFooter/2", "block_type": "PageFooter", "page": 0,
+          "html": "<p>Page 1</p>"}],
+        [{"id": "/page/1/PageHeader/0", "block_type": "PageHeader", "page": 1,
+          "html": "<p>Running head</p>"},
+         _text("/page/1/Text/1", 1, "<p block-type='Text'>ionisation state.</p>"),
+         _text("/page/1/Text/2", 1, "<p block-type='Text'>Next paragraph.</p>")],
+    )
+    structure = bs.build_tree(doc, "paper", tmp_path)
+    assert [n["text"] for n in structure] == [
+        "The bands trace the ionisation state.", "Next paragraph."]
+    assert structure[0]["page"] == 0
+    assert structure[0]["source_block_ids"] == ["/page/0/Text/1", "/page/1/Text/1"]
+    assert [n["node_id"] for n in structure] == ["0001", "0002"]
+
+
+def test_hyphenated_word_split_across_pages_is_rejoined(tmp_path):
+    doc = _two_pages(
+        [_text("/page/0/Text/0", 0,
+               "<p class='has-continuation'>a photo-</p>")],
+        [_text("/page/1/Text/0", 1, "<p>dissociation front</p>")],
+    )
+    structure = bs.build_tree(doc, "paper", tmp_path)
+    assert [n["text"] for n in structure] == ["a photodissociation front"]
+
+
+def test_continuation_chains_across_three_blocks(tmp_path):
+    doc = {"children": [{"block_type": "Page", "children": [
+        _text("/page/0/Text/0", 0, "<p class='has-continuation'>one</p>"),
+        _text("/page/0/Text/1", 0, "<p class='has-continuation'>two</p>"),
+        _text("/page/0/Text/2", 0, "<p>three</p>"),
+    ]}]}
+    structure = bs.build_tree(doc, "paper", tmp_path)
+    assert [n["text"] for n in structure] == ["one two three"]
+    assert len(structure[0]["source_block_ids"]) == 3
+
+
+def test_continuation_is_dropped_when_another_block_intervenes(tmp_path):
+    """Marker only flags a continuation when the very next non-header/footer
+    block is text; if anything else sits between, the paragraphs stay apart."""
+    doc = _two_pages(
+        [_text("/page/0/Text/0", 0, "<p class='has-continuation'>Before</p>")],
+        [{"id": "/page/1/Equation/0", "block_type": "Equation", "page": 1,
+          "html": "<math>x=1</math>"},
+         _text("/page/1/Text/1", 1, "<p>after</p>")],
+    )
+    structure = bs.build_tree(doc, "paper", tmp_path)
+    assert [n["block_type"] for n in structure] == ["paragraph", "equation", "paragraph"]
+    assert structure[2]["text"] == "after"
+
+
+def test_trailing_hyphen_kept_unless_after_lowercase_letter():
+    """Only lowercase-letter + hyphen is treated as a broken word."""
+    assert bs.join_continued("a photo-", "dissociation") == "a photodissociation"
+    assert bs.join_continued("the H-", "band") == "the H- band"
+    assert bs.join_continued("from 20-", "30 K") == "from 20- 30 K"
+
+
+# Geometric fallback: Datalab's hosted API strips has-continuation, so splits
+# are recognised from bboxes. Page 1000 x 1400, two columns at x 50-480 / 520-950.
+PAGE_BBOX = [0, 0, 1000, 1400]
+
+
+def _gtext(block_id, page, bbox, text):
+    return {"id": block_id, "block_type": "Text", "page": page,
+            "bbox": bbox, "html": f"<p>{text}</p>"}
+
+
+def _gpage(*children):
+    return {"block_type": "Page", "bbox": PAGE_BBOX, "children": list(children)}
+
+
+def test_unflagged_split_across_page_break_is_merged(tmp_path):
+    doc = {"children": [
+        _gpage(_gtext("/page/2/Text/15", 2, [520, 1200, 950, 1350],
+                      "allows the model to replace DFT")),
+        _gpage({"id": "/page/3/PageHeader/0", "block_type": "PageHeader", "page": 3,
+                "bbox": [50, 40, 300, 60], "html": "<p>Mai et al.</p>"},
+               _gtext("/page/3/Text/1", 3, [50, 80, 480, 200],
+                      "electronic structure calculations.")),
+    ]}
+    structure = bs.build_tree(doc, "paper", tmp_path)
+    assert [n["text"] for n in structure] == [
+        "allows the model to replace DFT electronic structure calculations."]
+    assert structure[0]["source_block_ids"] == ["/page/2/Text/15", "/page/3/Text/1"]
+
+
+def test_unflagged_split_across_column_break_is_merged(tmp_path):
+    doc = {"children": [_gpage(
+        _gtext("/page/1/Text/6", 1, [50, 900, 480, 1350],
+               "faced challenges related to accuracy and"),
+        _gtext("/page/1/Text/7", 1, [520, 100, 950, 400],
+               "transferability of force fields."),
+    )]}
+    structure = bs.build_tree(doc, "paper", tmp_path)
+    assert [n["text"] for n in structure] == [
+        "faced challenges related to accuracy and transferability of force fields."]
+
+
+def test_finished_sentence_at_column_break_is_not_merged(tmp_path):
+    doc = {"children": [_gpage(
+        _gtext("/page/1/Text/6", 1, [50, 900, 480, 1350], "The paragraph ends here."),
+        _gtext("/page/1/Text/7", 1, [520, 100, 950, 400], "A new paragraph starts."),
+    )]}
+    structure = bs.build_tree(doc, "paper", tmp_path)
+    assert len(structure) == 2
+
+
+def test_consecutive_blocks_in_same_column_are_not_merged(tmp_path):
+    """Front-matter lines such as affiliations end without punctuation but are
+    stacked in one column: no page or column break, so no merge."""
+    doc = {"children": [_gpage(
+        _gtext("/page/0/Text/8", 0, [50, 300, 480, 330], "1 Guangxi University, China"),
+        _gtext("/page/0/Text/9", 0, [50, 335, 480, 365], "2 TU Wien, 1060 Vienna, Austria"),
+    )]}
+    structure = bs.build_tree(doc, "paper", tmp_path)
+    assert len(structure) == 2
+
+
+def test_ends_mid_sentence_ignores_trailing_marks():
+    assert bs.ends_mid_sentence("accuracy and")
+    assert not bs.ends_mid_sentence("as shown (Smith 2007).")
+    assert not bs.ends_mid_sentence("the cross-section (Berens & Wilson 1981):")
+    assert not bs.ends_mid_sentence("data bases.<sup>2</sup>")
+    assert not bs.ends_mid_sentence("*a full sentence.*")
+
+
+def test_list_items_split_on_br_inside_single_li():
+    html = ('<ul style="list-style-type: none"><li>Andrews, H. 2015, <i>ApJ</i>, 807, 99'
+            '<br/> Bakes, E. L. O. 2001, <i>ApJ</i>, 556, 501<br/> Tielens 2008</li></ul>')
+    assert bs.parse_list_items(html) == [
+        "Andrews, H. 2015, *ApJ*, 807, 99", "Bakes, E. L. O. 2001, *ApJ*, 556, 501",
+        "Tielens 2008"]
+
+
+def test_list_items_from_sibling_paragraphs():
+    html = ("<p>Roser, J. E., &amp; Ricca, A. 2015, <i>ApJ</i>, 801, 108</p>"
+            "<p>Roser, J. E., &amp; Ricca, A. 2020, <i>IAUS</i>, 15, 415</p>")
+    assert bs.parse_list_items(html) == [
+        "Roser, J. E., & Ricca, A. 2015, *ApJ*, 801, 108",
+        "Roser, J. E., & Ricca, A. 2020, *IAUS*, 15, 415"]

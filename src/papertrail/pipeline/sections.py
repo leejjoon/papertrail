@@ -82,6 +82,69 @@ def clean_inline(html: str) -> str:
     return text.strip()
 
 
+def has_continuation(html: str) -> bool:
+    """True when Marker flagged this Text block as continuing into the next one
+    (a paragraph cut by a page or column break). Marker's TextProcessor sets
+    `has_continuation`, which the HTML carries as class='has-continuation' on the
+    outer <p>; only Marker's markdown renderer acts on it, so JSON output still
+    delivers the two halves as separate blocks."""
+    tag = BeautifulSoup(html or "", "html.parser").find(True)
+    return tag is not None and "has-continuation" in (tag.get("class") or [])
+
+
+# Datalab's hosted API strips the has-continuation class (verified on a
+# balanced-mode conversion: every Text block arrives as a bare <p>), and its
+# Text blocks carry no child Line geometry, so Marker's TextProcessor cannot be
+# replayed exactly. looks_continued() approximates it from block bboxes plus a
+# text check that stands in for Marker's line-width/indentation tests.
+
+_SENTENCE_END = re.compile(r"[.!?:;]$")
+_TRAILING_NOISE = re.compile(r"(?:\s|<sup>[^<]*</sup>|[)\]\"'”’*])+$")
+
+
+def ends_mid_sentence(text: str) -> bool:
+    """True when the text stops without sentence-ending punctuation, ignoring
+    closing brackets/quotes, markdown emphasis and trailing footnote marks."""
+    core = _TRAILING_NOISE.sub("", text or "")
+    return bool(core) and not _SENTENCE_END.search(core)
+
+
+def looks_continued(prev: dict, nxt: dict) -> bool:
+    """Geometric half of Marker's TextProcessor, on bboxes [x0, y0, x1, y1].
+
+    prev/nxt: {"bbox", "page", "page_bbox"} for two Text blocks with only page
+    headers/footers between them. A page break counts when nxt starts in the
+    top-left quadrant of its page; a column break when nxt starts no lower
+    than prev and to the right of it by more than 2% of prev's width."""
+    pb, nb = prev.get("bbox"), nxt.get("bbox")
+    if not pb or not nb:
+        return False
+    if nxt.get("page") != prev.get("page"):
+        page = nxt.get("page_bbox")
+        if not page:
+            return False
+        width, height = page[2] - page[0], page[3] - page[1]
+        return nb[0] < width / 2 and nb[1] < height / 2
+    gap = (pb[2] - pb[0]) * 0.02
+    return nb[1] <= pb[1] and nb[0] > pb[2] + gap
+
+
+_HYPHENS = "-—¬"  # same set Marker's markdown renderer strips
+
+
+def join_continued(head: str, tail: str) -> str:
+    """Join the two halves of a split paragraph the way Marker's markdown
+    renderer does: a trailing hyphen after a lowercase letter is a broken word,
+    so drop it and join directly; otherwise join with a space. Unlike Marker,
+    a digit before the hyphen does not count, so a line-broken range such as
+    "20-" / "30 K" is not fused into "2030 K"."""
+    stripped = head.rstrip()
+    if (len(stripped) >= 2 and stripped[-1] in _HYPHENS
+            and stripped[-2].islower()):
+        return stripped[:-1] + tail.lstrip()
+    return f"{stripped} {tail.lstrip()}"
+
+
 def heading_level(html: str) -> int:
     m = re.search(r"<h([1-6])", html or "", re.IGNORECASE)
     return int(m.group(1)) if m else 2
@@ -124,18 +187,22 @@ def parse_list_items(html: str) -> list[str]:
     — verified on MNRAS papers — a single <p> with entries separated by plain
     <br/> tags and no <li> at all. Handle both; <br>-splitting works on the raw
     HTML string rather than the parsed tree so inline markup (<i>, <b>, <math>)
-    within each entry survives clean_inline() unchanged."""
-    soup = BeautifulSoup(html or "", "html.parser")
-    li_tags = soup.find_all("li")
-    if li_tags:
-        items = [clean_inline(li.decode_contents()) for li in li_tags]
-        return [i for i in items if i]
+    within each entry survives clean_inline() unchanged.
 
-    container = soup.find("p") or soup
-    inner_html = container.decode_contents() if hasattr(container, "decode_contents") else str(container)
-    raw_items = re.split(r"<br\s*/?>", inner_html, flags=re.IGNORECASE)
-    items = [clean_inline(raw) for raw in raw_items]
-    return [i for i in items if i]
+    Two more shapes, seen in Datalab balanced-mode output (2026-11): a single
+    <li> holding dozens of <br/>-separated entries (ApJS/A&A), and a run of
+    sibling <p> elements, one entry each (blocks with Bibliography ids). So:
+    take the <li> items, else the <p> items, else the whole block, and split
+    every one of them on <br>."""
+    soup = BeautifulSoup(html or "", "html.parser")
+    containers = soup.find_all("li") or soup.find_all("p") or [soup]
+    items = []
+    for container in containers:
+        for raw in re.split(r"<br\s*/?>", container.decode_contents(), flags=re.IGNORECASE):
+            item = clean_inline(raw)
+            if item:
+                items.append(item)
+    return items
 
 
 # ---------------------------------------------------------------------------
@@ -172,6 +239,12 @@ def build_tree(doc: dict, doc_id: str, assets_dir=None) -> list[dict]:
     stack = [{"level": 0, "nodes": root_nodes}]
     pending_caption: dict | None = None
     preceding_media: dict | None = None
+    # The most recent paragraph, while only page headers/footers have followed
+    # it: {"node", "flagged", "text", "bbox", "page", "page_bbox"}, describing
+    # its last source block. The next Text block is appended to that node when
+    # Marker flagged has-continuation or looks_continued() says so.
+    open_para: dict | None = None
+    page_bbox: list | None = None
 
     def next_id() -> str:
         return f"{next(counter):04d}"
@@ -187,15 +260,21 @@ def build_tree(doc: dict, doc_id: str, assets_dir=None) -> list[dict]:
             pending_caption = None
 
     def walk(children: list[dict]):
-        nonlocal pending_caption, preceding_media
+        nonlocal pending_caption, preceding_media, open_para, page_bbox
         for block in children:
             bt = block.get("block_type")
 
             if bt in RECURSE_TYPES:
                 preceding_media = None
+                page_bbox = block.get("bbox")
                 walk(block.get("children") or [])
                 preceding_media = None
                 continue
+
+            # Marker looks past page headers/footers for the continuation;
+            # any other intervening block ends it.
+            if bt not in ("Text", "PageHeader", "PageFooter"):
+                open_para = None
 
             if bt == "Caption":
                 caption = {
@@ -297,12 +376,29 @@ def build_tree(doc: dict, doc_id: str, assets_dir=None) -> list[dict]:
 
             if bt == "Text":
                 flush_pending_caption()
-                text = clean_inline(block.get("html") or "")
+                html = block.get("html") or ""
+                text = clean_inline(html)
                 if text:
-                    stack[-1]["nodes"].append({
-                        "node_id": next_id(), "kind": "leaf", "block_type": "paragraph",
-                        "text": text, "page": block.get("page"),
-                        "source_block_ids": [block.get("id")]})
+                    here = {"bbox": block.get("bbox"), "page": block.get("page"),
+                            "page_bbox": page_bbox}
+                    if open_para is not None and (
+                            open_para["flagged"]
+                            or (ends_mid_sentence(open_para["text"])
+                                and looks_continued(open_para, here))):
+                        # Second half of a paragraph split by a page/column
+                        # break: extend the open node, keeping its first page
+                        # and citing both source blocks.
+                        node = open_para["node"]
+                        node["text"] = join_continued(node["text"], text)
+                        node["source_block_ids"].append(block.get("id"))
+                    else:
+                        node = {
+                            "node_id": next_id(), "kind": "leaf", "block_type": "paragraph",
+                            "text": text, "page": block.get("page"),
+                            "source_block_ids": [block.get("id")]}
+                        stack[-1]["nodes"].append(node)
+                    open_para = {"node": node, "flagged": has_continuation(html),
+                                 "text": text, **here}
                 continue
 
             # Unknown/unobserved block type (e.g. a future Datalab addition, or a
