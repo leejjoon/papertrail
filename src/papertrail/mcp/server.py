@@ -365,7 +365,8 @@ def build_server(settings: Settings) -> MCPServer:
         path = settings.assets_dir / asset
         if not path.exists():
             return f"Image asset missing on disk: {asset}"
-        return Image(data=path.read_bytes(), format="jpeg")
+        fmt = path.suffix.lower().lstrip(".")
+        return Image(data=path.read_bytes(), format=fmt if fmt in ("png", "gif", "webp") else "jpeg")
 
     @mcp.tool()
     def validate_answer(payload: dict) -> dict:

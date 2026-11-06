@@ -32,7 +32,9 @@ clicking one jumps the reader pane to that paragraph.*
 
 For a single local PDF, `papertrail ingest-pdf FILE --corpus PATH` performs the
 Datalab conversion, Stage A extraction, and Stage E indexing in one resumable
-command. Then run `papertrail serve --corpus PATH` to open the browser reader.
+command. `papertrail ingest-epub FILE --corpus PATH` does the same for an EPUB,
+converting it locally into the same JSON shape. Then run
+`papertrail serve --corpus PATH` to open the browser reader.
 
 Full flag reference: [REFERENCE.md §1](REFERENCE.md#1-cli). Working example with real
 output: [QUICKSTART.md](QUICKSTART.md).

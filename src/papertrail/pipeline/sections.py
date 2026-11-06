@@ -210,23 +210,27 @@ def parse_list_items(html: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def extract_image_asset(block: dict, doc_id: str, assets_dir) -> str | None:
-    """Decode the first (typically only) image in a Figure block's `images`
-    field to <assets_dir>/<doc_id>/<block_id_slug>.jpeg. Returns the relative
-    path stored in the node's image_asset field, or None if no image present."""
+    """Decode the first (typically only) image in a Figure (or image-only
+    Equation) block's `images` field to <assets_dir>/<doc_id>/<block_id_slug>.<ext>.
+    The extension is .jpeg unless the image's name says PNG/GIF/SVG/WebP (EPUB
+    equation images are PNG). Returns the relative path stored in the node's
+    image_asset field, or None if no image present."""
     images = block.get("images") or {}
     if not images:
         return None
-    _, b64data = next(iter(images.items()))
+    name, b64data = next(iter(images.items()))
     block_id = block.get("id") or ""
     slug = block_id.strip("/").replace("/", "_") or f"block_{block.get('page', 0)}"
+    ext = os.path.splitext(name or "")[1].lower().lstrip(".")
+    ext = ext if ext in ("png", "gif", "svg", "webp") else "jpeg"
     out_dir = assets_dir / doc_id
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{slug}.jpeg"
+    out_path = out_dir / f"{slug}.{ext}"
     try:
         out_path.write_bytes(base64.b64decode(b64data))
     except Exception:
         return None
-    return f"{doc_id}/{slug}.jpeg"
+    return f"{doc_id}/{slug}.{ext}"
 
 
 # ---------------------------------------------------------------------------
@@ -341,10 +345,20 @@ def build_tree(doc: dict, doc_id: str, assets_dir=None) -> list[dict]:
 
             if bt == "Equation":
                 flush_pending_caption()
-                stack[-1]["nodes"].append({
-                    "node_id": next_id(), "kind": "leaf", "block_type": "equation",
-                    "text": extract_equation(block.get("html") or ""),
-                    "page": block.get("page"), "source_block_ids": [block.get("id")]})
+                html = block.get("html") or ""
+                node = {"node_id": next_id(), "kind": "leaf", "block_type": "equation",
+                        "text": extract_equation(html),
+                        "page": block.get("page"), "source_block_ids": [block.get("id")]}
+                if "<math" not in html and block.get("images"):
+                    # Image-only equation (EPUBs that ship equations as PNGs):
+                    # no LaTeX exists, so keep the picture and its label.
+                    label = node["text"]
+                    node["text"] = f"[equation {label}]" if label else "[equation]"
+                    image_asset = (extract_image_asset(block, doc_id, assets_dir)
+                                   if assets_dir else None)
+                    if image_asset:
+                        node["image_asset"] = image_asset
+                stack[-1]["nodes"].append(node)
                 continue
 
             if bt == "Footnote":

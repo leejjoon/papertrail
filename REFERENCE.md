@@ -38,6 +38,7 @@ it up below, and calls `module.main(sys.argv[2:])`.
 | `index` | `papertrail.pipeline.index` | E: build `kb.sqlite` |
 | `mcp` | `papertrail.mcp.server` | run the MCP server |
 | `ingest-pdf` | `papertrail.pipeline.ingest_pdf` | convert one PDF with Datalab, build sections, and refresh the index |
+| `ingest-epub` | `papertrail.pipeline.ingest_epub` | convert one EPUB locally, build sections, and refresh the index |
 | `serve` | `papertrail.web.serve` | run the browser reader for an explicit corpus |
 
 An unknown or missing subcommand prints `usage: papertrail <command> [args...]` plus this
@@ -46,6 +47,19 @@ list to stderr and exits `2`.
 `ingest-pdf --init-corpus` creates a minimal manifest-backed `corpus.yaml` when missing.
 `--corpus-title` customizes its browser title and is valid only with `--init-corpus`.
 Existing corpus configuration is never overwritten.
+
+`ingest-epub FILE --corpus PATH` is the EPUB counterpart: same flags except `--mode`,
+and `--fulltext-source` defaults to `publisher_epub`. Conversion is local
+(`papertrail/epub.py`; no API key) and writes Datalab-shaped JSON to the same
+`<marker_dir>/<doc_id>.json` slot, so `sections`, `index`, `serve` and `mcp` treat
+EPUB- and PDF-derived documents alike; ingesting an EPUB under an existing doc_id
+replaces the PDF-derived tree. Title, authors, year, journal and DOI missing from the
+command line and from `documents.yaml` are taken from the EPUB's OPF metadata.
+Differences from a PDF conversion: leaf `page` is `null` (EPUBs have no pages);
+figure/table captions are folded into the figure/table node (`caption`) rather than
+emitted as separate `caption` nodes; and publishers that ship equations only as
+images (EDP Sciences / A&A) give `equation` nodes with an `image_asset` and text
+`[equation (N)]`, while inline equation images become the text `[equation]`.
 
 **`run-all`/`lint`/`doctor` do not exist.** The web app may be launched via
 `papertrail serve --corpus PATH` or directly via

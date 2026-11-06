@@ -65,6 +65,15 @@ def render_node_html(node: dict, asset_prefix: str = "assets") -> str:
         return _anchor_wrap(node_id, css, body)
 
     if bt == "equation":
+        asset = node.get("image_asset")
+        if asset:
+            # Image-only equation (from an EPUB): show the picture, keep the label.
+            label = re.sub(r"^\[equation\s*|\]$", "", text).strip()
+            label_html = f' <span class="equation-label">{html_stdlib.escape(label)}</span>' \
+                if label else ""
+            return _anchor_wrap(node_id, "node-equation",
+                                f'<div class="equation"><img src="{asset_prefix}/{asset}" '
+                                f'alt="equation">{label_html}</div>')
         # Rendered as display math; text is already "$$\n<latex>\n$$".
         return _anchor_wrap(node_id, "node-equation", f'<div class="equation">{text}</div>')
 

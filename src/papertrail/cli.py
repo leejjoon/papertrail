@@ -7,6 +7,7 @@ import sys
 
 _SUBCOMMANDS = {
     "ingest-pdf": ("papertrail.pipeline.ingest_pdf", "Datalab PDF conversion + sections + index"),
+    "ingest-epub": ("papertrail.pipeline.ingest_epub", "local EPUB conversion + sections + index"),
     "sections": ("papertrail.pipeline.sections", "Stage A: Marker JSON -> section-tree JSON"),
     "classify": ("papertrail.pipeline.classify", "Stage B: LLM taxonomy classification"),
     "paper-pages": ("papertrail.pipeline.paper_pages", "Stage C: cited wiki paper pages"),

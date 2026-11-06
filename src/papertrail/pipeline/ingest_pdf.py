@@ -89,7 +89,12 @@ def _first_heading(document: dict) -> str | None:
     return walk(document.get("children"))
 
 
-def _upsert_document(settings: Settings, doc_id: str, result: dict, args) -> None:
+def _upsert_document(settings: Settings, doc_id: str, result: dict, args,
+                     defaults: dict | None = None) -> None:
+    """Write the documents.yaml entry. Precedence per field: command-line
+    argument, then the existing entry, then `defaults` (metadata the source
+    file itself carries, e.g. an EPUB's OPF), then a fallback."""
+    defaults = defaults or {}
     path = settings.corpus.documents_path()
     if path is None:
         known = {p["doc_id"] for p in settings.corpus.load_papers()}
@@ -108,13 +113,14 @@ def _upsert_document(settings: Settings, doc_id: str, result: dict, args) -> Non
     entry = {
         **existing,
         "doc_id": doc_id,
-        "title": args.title or existing.get("title") or _first_heading(result["json"]) or doc_id,
-        "authors": args.authors if args.authors is not None else existing.get("authors"),
-        "year": args.year if args.year is not None else existing.get("year"),
-        "journal": args.journal if args.journal is not None else existing.get("journal"),
+        "title": (args.title or existing.get("title") or defaults.get("title")
+                  or _first_heading(result["json"]) or doc_id),
+        "authors": _pick(args.authors, existing.get("authors"), defaults.get("authors")),
+        "year": _pick(args.year, existing.get("year"), defaults.get("year")),
+        "journal": _pick(args.journal, existing.get("journal"), defaults.get("journal")),
         "has_fulltext": True,
         "fulltext_source": args.fulltext_source,
-        "extra": existing.get("extra") or {},
+        "extra": {**(defaults.get("extra") or {}), **(existing.get("extra") or {})},
     }
     if existing:
         documents[documents.index(existing)] = entry
@@ -125,6 +131,10 @@ def _upsert_document(settings: Settings, doc_id: str, result: dict, args) -> Non
     tmp.write_text(yaml.safe_dump({"documents": documents}, sort_keys=False, allow_unicode=True),
                    encoding="utf-8")
     os.replace(tmp, path)
+
+
+def _pick(*values):
+    return next((v for v in values if v is not None), None)
 
 
 def _atomic_rebuild_index(settings: Settings) -> None:
